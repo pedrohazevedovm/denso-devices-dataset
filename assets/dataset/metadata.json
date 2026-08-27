@@ -1,0 +1,485 @@
+{
+  "dataset_version": "1.0",
+  "generated_at": "2026-08-25T19:40:53.903751",
+  "dry_run": false,
+  "robot_info": {
+    "model": "DENSO VS-050",
+    "ip_address": "192.168.160.225",
+    "tcp_offset": {
+      "x": 0.0,
+      "y": 0.0,
+      "z": 0.0,
+      "rx": 0.0,
+      "ry": 0.0,
+      "rz": 0.0,
+      "tag": "SMARTPHONE_TOOL"
+    }
+  },
+  "variations_config": {
+    "delta_trans_xy": {
+      "dx": 20.0,
+      "dy": 15.0
+    },
+    "delta_rot_z": 15.0,
+    "delta_scale_z": -30.0,
+    "delta_combined": {
+      "dx": 15.0,
+      "dy": 10.0,
+      "dz": -20.0,
+      "drz": 10.0
+    }
+  },
+  "cameras": {
+    "NGCLC30107": "cam_01_NGCLC30107",
+    "0083314248": "cam_02_0083314248"
+  },
+  "scenes": {
+    "scene_01": {
+      "name": "scene_01",
+      "description": "Enquadramento do Cenário 01",
+      "p0_base_pose": [
+        440.0,
+        60.0,
+        585.0,
+        16.0,
+        -22.0,
+        150.0,
+        1
+      ],
+      "waypoints": [
+        {
+          "waypoint_id": "p0_reference",
+          "filename": "p0_reference.jpg",
+          "variation_type": "reference",
+          "commanded_cartesian_pose": [
+            440.0,
+            60.0,
+            585.0,
+            16.0,
+            -22.0,
+            150.0,
+            1
+          ],
+          "actual_cartesian_pose": [
+            440.0000048114644,
+            60.00000059945264,
+            584.9999987346431,
+            15.999999999999483,
+            -21.99999999999968,
+            150.0000000000006,
+            1
+          ],
+          "actual_joint_pose": [
+            7.7907665439460985,
+            39.119925660113225,
+            56.772978850505716,
+            0.17410266590152887,
+            -68.92625241609164,
+            145.31526058952437
+          ],
+          "delta_applied": {
+            "dx": 0.0,
+            "dy": 0.0,
+            "dz": 0.0,
+            "drz": 0.0
+          },
+          "timestamp": "2026-08-25T19:39:42.350474",
+          "captures": {}
+        },
+        {
+          "waypoint_id": "p1_trans_xy",
+          "filename": "p1_trans_xy.jpg",
+          "variation_type": "translation_xy",
+          "commanded_cartesian_pose": [
+            460.0,
+            75.0,
+            585.0,
+            16.0,
+            -22.0,
+            150.0,
+            1
+          ],
+          "actual_cartesian_pose": [
+            459.99998539758843,
+            74.99999806164256,
+            585.0000109328437,
+            16.000000000000135,
+            -21.999999999999964,
+            149.99999999999974,
+            1
+          ],
+          "actual_joint_pose": [
+            9.393728705029195,
+            45.81248750252086,
+            45.65380199608843,
+            0.9850847486336249,
+            -64.51595198620747,
+            143.5251806288127
+          ],
+          "delta_applied": {
+            "dx": 20.0,
+            "dy": 15.0,
+            "dz": 0.0,
+            "drz": 0.0
+          },
+          "timestamp": "2026-08-25T19:39:50.435795",
+          "captures": {
+            "cam_01_NGCLC30107": "scene_01/cam_01_NGCLC30107/p1_trans_xy.jpg",
+            "cam_02_0083314248": "scene_01/cam_02_0083314248/p1_trans_xy.jpg"
+          }
+        },
+        {
+          "waypoint_id": "p2_rot_z",
+          "filename": "p2_rot_z.jpg",
+          "variation_type": "rotation_z",
+          "commanded_cartesian_pose": [
+            440.0,
+            60.0,
+            585.0,
+            16.0,
+            -22.0,
+            165.0,
+            1
+          ],
+          "actual_cartesian_pose": [
+            439.99999781839966,
+            60.00000197850779,
+            585.0001146680768,
+            16.000000000000078,
+            -22.000000000000025,
+            164.99999999999986,
+            1
+          ],
+          "actual_joint_pose": [
+            6.6515876823799776,
+            39.43324038075592,
+            56.264972413623006,
+            -7.552459718496067,
+            -69.77309192964007,
+            162.45944725072337
+          ],
+          "delta_applied": {
+            "dx": 0.0,
+            "dy": 0.0,
+            "dz": 0.0,
+            "drz": 15.0
+          },
+          "timestamp": "2026-08-25T19:39:58.353184",
+          "captures": {
+            "cam_01_NGCLC30107": "scene_01/cam_01_NGCLC30107/p2_rot_z.jpg",
+            "cam_02_0083314248": "scene_01/cam_02_0083314248/p2_rot_z.jpg"
+          }
+        },
+        {
+          "waypoint_id": "p3_scale_z",
+          "filename": "p3_scale_z.jpg",
+          "variation_type": "scale_z",
+          "commanded_cartesian_pose": [
+            440.0,
+            60.0,
+            555.0,
+            16.0,
+            -22.0,
+            150.0,
+            1
+          ],
+          "actual_cartesian_pose": [
+            440.0000639103552,
+            60.00000877031629,
+            554.9999963414723,
+            15.999999999999941,
+            -22.0,
+            150.0000000000001,
+            1
+          ],
+          "actual_joint_pose": [
+            7.790766561685869,
+            40.080508411673414,
+            61.99508457697104,
+            0.16810398189446177,
+            -75.10891338724366,
+            145.3346628256925
+          ],
+          "delta_applied": {
+            "dx": 0.0,
+            "dy": 0.0,
+            "dz": -30.0,
+            "drz": 0.0
+          },
+          "timestamp": "2026-08-25T19:40:06.300598",
+          "captures": {
+            "cam_01_NGCLC30107": "scene_01/cam_01_NGCLC30107/p3_scale_z.jpg",
+            "cam_02_0083314248": "scene_01/cam_02_0083314248/p3_scale_z.jpg"
+          }
+        },
+        {
+          "waypoint_id": "p4_combined",
+          "filename": "p4_combined.jpg",
+          "variation_type": "combined",
+          "commanded_cartesian_pose": [
+            455.0,
+            70.0,
+            565.0,
+            16.0,
+            -22.0,
+            160.0,
+            1
+          ],
+          "actual_cartesian_pose": [
+            454.999980341386,
+            69.99999501646055,
+            565.0000894859419,
+            15.999999999999993,
+            -21.999999999999925,
+            159.99999999999994,
+            1
+          ],
+          "actual_joint_pose": [
+            8.106083657811606,
+            44.350991918978906,
+            52.625777341125236,
+            -4.475014456525741,
+            -70.37193671541556,
+            155.53049443994755
+          ],
+          "delta_applied": {
+            "dx": 15.0,
+            "dy": 10.0,
+            "dz": -20.0,
+            "drz": 10.0
+          },
+          "timestamp": "2026-08-25T19:40:14.066116",
+          "captures": {
+            "cam_01_NGCLC30107": "scene_01/cam_01_NGCLC30107/p4_combined.jpg",
+            "cam_02_0083314248": "scene_01/cam_02_0083314248/p4_combined.jpg"
+          }
+        }
+      ]
+    },
+    "scene_02": {
+      "name": "scene_02",
+      "description": "Enquadramento do Cenário 02",
+      "p0_base_pose": [
+        440.0,
+        60.0,
+        585.0,
+        16.0,
+        -22.0,
+        150.0,
+        1
+      ],
+      "waypoints": [
+        {
+          "waypoint_id": "p0_reference",
+          "filename": "p0_reference.jpg",
+          "variation_type": "reference",
+          "commanded_cartesian_pose": [
+            440.0,
+            60.0,
+            585.0,
+            16.0,
+            -22.0,
+            150.0,
+            1
+          ],
+          "actual_cartesian_pose": [
+            440.0000002894665,
+            59.99999994819754,
+            585.000011086132,
+            16.000000000000025,
+            -21.999999999999986,
+            150.0,
+            1
+          ],
+          "actual_joint_pose": [
+            7.79076651923535,
+            39.11995015462727,
+            56.772990267867335,
+            0.17410261184281145,
+            -68.92628832772628,
+            145.3152607328112
+          ],
+          "delta_applied": {
+            "dx": 0.0,
+            "dy": 0.0,
+            "dz": 0.0,
+            "drz": 0.0
+          },
+          "timestamp": "2026-08-25T19:40:21.979681",
+          "captures": {
+            "cam_01_NGCLC30107": "scene_02/cam_01_NGCLC30107/p0_reference.jpg",
+            "cam_02_0083314248": "scene_02/cam_02_0083314248/p0_reference.jpg"
+          }
+        },
+        {
+          "waypoint_id": "p1_trans_xy",
+          "filename": "p1_trans_xy.jpg",
+          "variation_type": "translation_xy",
+          "commanded_cartesian_pose": [
+            460.0,
+            75.0,
+            585.0,
+            16.0,
+            -22.0,
+            150.0,
+            1
+          ],
+          "actual_cartesian_pose": [
+            459.9999967448856,
+            74.99999911879266,
+            584.9999460506244,
+            15.99999999999991,
+            -22.000000000000004,
+            150.00000000000017,
+            1
+          ],
+          "actual_joint_pose": [
+            9.393728628474438,
+            45.81250963803899,
+            45.653793195167395,
+            0.9850846009351533,
+            -64.51596531751818,
+            143.5251809675377
+          ],
+          "delta_applied": {
+            "dx": 20.0,
+            "dy": 15.0,
+            "dz": 0.0,
+            "drz": 0.0
+          },
+          "timestamp": "2026-08-25T19:40:29.700364",
+          "captures": {
+            "cam_01_NGCLC30107": "scene_02/cam_01_NGCLC30107/p1_trans_xy.jpg",
+            "cam_02_0083314248": "scene_02/cam_02_0083314248/p1_trans_xy.jpg"
+          }
+        },
+        {
+          "waypoint_id": "p2_rot_z",
+          "filename": "p2_rot_z.jpg",
+          "variation_type": "rotation_z",
+          "commanded_cartesian_pose": [
+            440.0,
+            60.0,
+            585.0,
+            16.0,
+            -22.0,
+            165.0,
+            1
+          ],
+          "actual_cartesian_pose": [
+            440.0000265840544,
+            60.00000463346308,
+            584.9999981034566,
+            16.00000000000003,
+            -21.999999999999986,
+            164.9999999999999,
+            1
+          ],
+          "actual_joint_pose": [
+            6.651588204190656,
+            39.43320695995378,
+            56.2650635139688,
+            -7.552456683708241,
+            -69.7731490405656,
+            162.45943862287854
+          ],
+          "delta_applied": {
+            "dx": 0.0,
+            "dy": 0.0,
+            "dz": 0.0,
+            "drz": 15.0
+          },
+          "timestamp": "2026-08-25T19:40:37.850827",
+          "captures": {
+            "cam_01_NGCLC30107": "scene_02/cam_01_NGCLC30107/p2_rot_z.jpg",
+            "cam_02_0083314248": "scene_02/cam_02_0083314248/p2_rot_z.jpg"
+          }
+        },
+        {
+          "waypoint_id": "p3_scale_z",
+          "filename": "p3_scale_z.jpg",
+          "variation_type": "scale_z",
+          "commanded_cartesian_pose": [
+            440.0,
+            60.0,
+            555.0,
+            16.0,
+            -22.0,
+            150.0,
+            1
+          ],
+          "actual_cartesian_pose": [
+            439.99996583577047,
+            59.9999953187569,
+            554.9999781279989,
+            15.999999999999947,
+            -21.999999999999957,
+            150.00000000000009,
+            1
+          ],
+          "actual_joint_pose": [
+            7.7907665316306645,
+            40.08048081438845,
+            61.99512275974028,
+            0.16810395953308288,
+            -75.10892397259619,
+            145.33466288824053
+          ],
+          "delta_applied": {
+            "dx": 0.0,
+            "dy": 0.0,
+            "dz": -30.0,
+            "drz": 0.0
+          },
+          "timestamp": "2026-08-25T19:40:45.907187",
+          "captures": {
+            "cam_01_NGCLC30107": "scene_02/cam_01_NGCLC30107/p3_scale_z.jpg",
+            "cam_02_0083314248": "scene_02/cam_02_0083314248/p3_scale_z.jpg"
+          }
+        },
+        {
+          "waypoint_id": "p4_combined",
+          "filename": "p4_combined.jpg",
+          "variation_type": "combined",
+          "commanded_cartesian_pose": [
+            455.0,
+            70.0,
+            565.0,
+            16.0,
+            -22.0,
+            160.0,
+            1
+          ],
+          "actual_cartesian_pose": [
+            454.99998835044255,
+            70.00000044696719,
+            564.999984690309,
+            15.99999999999986,
+            -21.9999999999999,
+            160.00000000000017,
+            1
+          ],
+          "actual_joint_pose": [
+            8.106084330721004,
+            44.35100693816276,
+            52.625722946472216,
+            -4.475015232983481,
+            -70.37189740786988,
+            155.53049699475523
+          ],
+          "delta_applied": {
+            "dx": 15.0,
+            "dy": 10.0,
+            "dz": -20.0,
+            "drz": 10.0
+          },
+          "timestamp": "2026-08-25T19:40:53.902761",
+          "captures": {
+            "cam_01_NGCLC30107": "scene_02/cam_01_NGCLC30107/p4_combined.jpg",
+            "cam_02_0083314248": "scene_02/cam_02_0083314248/p4_combined.jpg"
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,20 @@
+[project]
+name = "visual-servoing-dataset"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "Pedro H Azevedo",email = "phavm@softex.cin.ufpe.br"}
+]
+readme = "README.md"
+package-mode = false 
+requires-python = ">=3.10,<3.14"
+dependencies = [
+    "aether-rdk @ file:///C:/Users/phavm/Documents/dev/python/visual-servoing-dataset/dependencies/aether_rdk-2.0.0-py3-none-any.whl",
+    "device-manager @ file:///C:/Users/phavm/Documents/dev/python/visual-servoing-dataset/dependencies/device_manager-1.7.2-py3-none-any.whl",
+    "pyyaml (>=6.0.3,<7.0.0)"
+]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"

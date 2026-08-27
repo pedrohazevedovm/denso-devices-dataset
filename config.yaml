@@ -1,0 +1,56 @@
+# Configuração do Sistema de Coleta de Dataset Visual Servoing
+
+dry_run: false  # Defina como false quando estiver conectado ao robô e smartphone reais
+
+robot:
+  ip_address: "192.168.160.225"
+  workspace_name: "VS_WORKSPACE"
+  control_name: "DENSO_VS050"
+  speed: 20.0                  # Velocidade do braço (0 a 100%)
+  accel: 20.0                  # Aceleração (0 a 100%)
+  decel: 20.0                  # Desaceleração (0 a 100%)
+  stabilization_delay_sec: 1.5 # Tempo de amortecimento/espera antes da foto
+  
+  tcp_offset:                  # Deslocamento do Tool Center Point (TCP) da ferramenta/suporte
+    x: 0.0                     # em mm
+    y: 0.0                     # em mm
+    z: 0.0                     # em mm
+    rx: 0.0                    # em graus
+    ry: 0.0                    # em graus
+    rz: 0.0                    # em graus
+    tag: "SMARTPHONE_TOOL"
+
+smartphone:
+  ips:
+    - "192.168.155.55"                   # "auto" para detectar automaticamente dispositivos USB conectados via ADB
+  camera_names:                # Mapeamento do número de série ADB para o nome legível da pasta
+    "sim_serial_01": "cam_01_moto_edge_40"
+    "sim_serial_02": "cam_02_moto_g13"
+  capture_delay_sec: 2.0       # Tempo de espera após comando de foto
+
+variations:
+  delta_trans_xy:              # Variação P1 (Translação XY)
+    dx: 20.0                   # mm
+    dy: 15.0                   # mm
+  delta_rot_z: 15.0            # Variação P2 (Rotação Rz / J6 em graus)
+  delta_scale_z: -30.0         # Variação P3 (Profundidade Z em mm)
+  delta_combined:              # Variação P4 (Combinada)
+    dx: 15.0                   # mm
+    dy: 10.0                   # mm
+    dz: -20.0                  # mm
+    drz: 10.0                  # graus
+
+scenes:
+  - name: "scene_01"
+    description: "Enquadramento do Cenário 01"
+    p0_pose:
+      cartesian: [440.0, 60.0, 585.0, 16.0, -22.0, 150.0, 1]
+
+  - name: "scene_02"
+    description: "Enquadramento do Cenário 02"
+    p0_pose:
+      cartesian: [440.0, 60.0, 585.0, 16.0, -22.0, 150.0, 1]
+
+dataset:
+  output_dir: "assets/dataset"
+  save_raw_photos: true
