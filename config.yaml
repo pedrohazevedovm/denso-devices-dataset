@@ -3,7 +3,7 @@
 dry_run: false  # Defina como false quando estiver conectado ao robô e smartphone reais
 
 robot:
-  ip_address: "192.168.160.225"
+  ip_address: "192.168.160.227"
   workspace_name: "VS_WORKSPACE"
   control_name: "DENSO_VS050"
   speed: 20.0                  # Velocidade do braço (0 a 100%)
@@ -21,12 +21,44 @@ robot:
     tag: "SMARTPHONE_TOOL"
 
 smartphone:
+  mode: "ip_camera"            # Opções: "ip_camera" (novo app Camera2 manual HTTP) ou "default_app" (app nativo via ADB)
+
+  # --- Configurações do modo "ip_camera" (HTTP / NanoHTTPD na porta 8080) ---
   ips:
-    - "192.168.155.55"                   # "auto" para detectar automaticamente dispositivos USB conectados via ADB
-  camera_names:                # Mapeamento do número de série ADB para o nome legível da pasta
+    - "192.168.158.48"         # Endereço IP do smartphone na rede Wi-Fi / LAN
+  port: 8080
+  default_preset: "1_home_visao_geral"
+  stabilization_delay_sec: 0.5 # Tempo de amortecimento para estabilização analógica do sensor após /config
+  timeout_sec: 3.0
+  presets:
+    "1_home_visao_geral":
+      focus_distance: 1.66     # Dioptrias (1 / 0.60m)
+      iso: 100
+      exposure_time_ns: 8333333 # ~8.33ms (1/120s)
+    "2_aproximacao_fina":
+      focus_distance: 5.0      # 20cm
+      iso: 100
+      exposure_time_ns: 10000000 # 10ms (1/100s)
+    "3_camera_em_movimento":
+      focus_distance: 2.5      # 40cm
+      iso: 400
+      exposure_time_ns: 2000000  # 2ms (1/500s)
+    "4_baixa_luminosidade":
+      focus_distance: 2.5
+      iso: 800
+      exposure_time_ns: 16666666 # ~16.6ms (1/60s)
+
+  # --- Configurações do modo "default_app" (legado ADB / device_manager) ---
+  serials:
+    - "auto"                   # "auto" ou número de série do dispositivo USB conectado via ADB
+  capture_delay_sec: 2.0       # Tempo de espera após comando de foto
+
+  # --- Mapeamento comum de identificadores (IP ou Serial) para o nome da pasta ---
+  camera_names:
+    "192.168.158.48": "cam_01_moto_edge_40"
+    "192.168.158.47": "cam_01_moto_edge_40"
     "sim_serial_01": "cam_01_moto_edge_40"
     "sim_serial_02": "cam_02_moto_g13"
-  capture_delay_sec: 2.0       # Tempo de espera após comando de foto
 
 variations:
   delta_trans_xy:              # Variação P1 (Translação XY)
@@ -42,12 +74,14 @@ variations:
 
 scenes:
   - name: "scene_01"
-    description: "Enquadramento do Cenário 01"
+    description: "Enquadramento do Cenário 01 - Visão Geral"
+    camera_preset: "1_home_visao_geral"
     p0_pose:
       cartesian: [440.0, 60.0, 585.0, 16.0, -22.0, 150.0, 1]
 
   - name: "scene_02"
-    description: "Enquadramento do Cenário 02"
+    description: "Enquadramento do Cenário 02 - Aproximação Fina"
+    camera_preset: "2_aproximacao_fina"
     p0_pose:
       cartesian: [440.0, 60.0, 585.0, 16.0, -22.0, 150.0, 1]
 

@@ -7,7 +7,9 @@ Sistema em Python de alta precisão projetado para automação da captura e orga
 ## 🌟 Principais Funcionalidades
 
 - **Controle Nativo do Robô DENSO VS-050**: Comunicação via biblioteca `aether_rdk` (bCAP/CAO Provedor `CaoProv.DENSO.RC8`) utilizando objetos nativos de dados **`Pose`** (`X, Y, Z, Rx, Ry, Rz, Fig`) e **`Joint`** (`J1, J2, J3, J4, J5, J6`).
-- **Controle Automático de Smartphones Android**: Integração via `device_manager` (ADB) para descoberta de dispositivos USB/IP, controle do app de câmera, disparo e download automático de imagens.
+- **Controle Dual de Câmeras Android (IP Camera ou App Padrão)**:
+  - **Modo `ip_camera` (Recomendado)**: Conexão direta via HTTP (NanoHTTPD na porta 8080) com aplicativo Android dedicado que bloqueia algoritmos 3A (Auto-Focus, Auto-Exposure, Auto-White Balance), estabilizações (OIS/EIS) e filtros ISP para máxima repetibilidade e zero latência. Suporta presets manuais (`focus_distance`, `iso`, `exposure_time_ns`) e extrai telemetria fotométrica direta do sensor.
+  - **Modo `default_app` (Legado)**: Controle do aplicativo nativo de câmera do fabricante via ADB (`device_manager`).
 - **Gerador de Trajetórias e Variações $P_0 \dots P_4$**: A partir de cada pose de enquadramento base $P_0$, calcula automaticamente 5 variações controladas:
   1. `p0_reference.jpg`: Pose de referência.
   2. `p1_trans_xy.jpg`: Translação apenas nos eixos $X$ e $Y$.
@@ -16,7 +18,7 @@ Sistema em Python de alta precisão projetado para automação da captura e orga
   5. `p4_combined.jpg`: Variações combinadas de translação, profundidade e rotação.
 - **Registro do Tool Center Point (TCP)**: Configuração do offset da ferramenta (`tcp_offset`) para acoplamento do suporte de smartphone na flange do robô.
 - **Organização por Cenas e Câmeras**: Estruturação automática do dataset em subpastas legíveis (`scene_XX/cam_XX/`).
-- **Indexação Unificada de Metadados**: Geração de `metadata.json` completo contendo poses comandadas e reais medidas, ângulos de juntas, timestamps e caminhos das fotos.
+- **Indexação Unificada de Metadados**: Geração de `metadata.json` completo contendo poses comandadas e reais medidas, ângulos de juntas, telemetria fotométrica de câmera (ISO, exposição, foco), timestamps e caminhos das fotos.
 - **Modo de Simulação (Dry-Run)**: Teste completo de fluxos, trajetórias e arquivos sem necessidade de hardware conectado.
 
 ---
@@ -25,17 +27,17 @@ Sistema em Python de alta precisão projetado para automação da captura e orga
 
 ```text
 visual-servoing-dataset/
-├── pyproject.toml              # Dependências Poetry (aether-rdk, device-manager, pyyaml, rich, etc.)
-├── config.yaml                 # Arquivo de configuração principal (IP, TCP, variações, cenas)
+├── pyproject.toml              # Dependências Poetry (aether-rdk, device-manager, pyyaml, requests, etc.)
+├── config.yaml                 # Arquivo de configuração principal (IP, modo de câmera, TCP, variações, cenas)
 ├── main.py                     # CLI principal (coleta, testes isolados, dry-run)
 ├── src/
 │   └── visual_servoing_dataset/
-│       ├── config.py           # Dataclasses de configuração e suporte aos objetos Pose/Joint
+│       ├── config.py           # Dataclasses de configuração (suporte a dual camera mode e objetos Pose/Joint)
 │       ├── robot/
 │       │   ├── denso_controller.py  # Wrapper da aether-rdk (controle cartesiano e por juntas)
 │       │   └── trajectories.py      # Gerador das variações P0..P4 em objetos Pose
 │       ├── smartphone/
-│       │   └── phone_controller.py  # Wrapper da device-manager (controle ADB e download de fotos)
+│       │   └── phone_controller.py  # Controlador unificado de câmeras (IP Camera HTTP + App Padrão ADB)
 │       ├── collector/
 │       │   └── dataset_collector.py # Orquestrador do dataset e gerador do metadata.json
 │       └── utils/
@@ -46,12 +48,7 @@ visual-servoing-dataset/
         ├── scene_01/
         │   ├── cam_01_moto_edge_40/
         │   │   ├── p0_reference.jpg
-        │   │   ├── p1_trans_xy.jpg
-        │   │   ├── p2_rot_z.jpg
-        │   │   ├── p3_scale_z.jpg
-        │   │   └── p4_combined.jpg
-        │   └── cam_02_moto_g13/
-        │       └── ...
+        │   │   └── ...
         └── scene_02/
             └── ...
 ```
@@ -70,8 +67,10 @@ visual-servoing-dataset/
    ```
 
 3. **Pré-requisitos de Hardware**:
-   - **Robô DENSO VS-050**: Controlador DENSO RC8 com servidor bCAP habilitado e endereço IP configurado (ex: `192.168.0.1`).
-   - **Smartphones Android**: **Depuração USB** habilitada nas opções de desenvolvedor e conectados via cabo USB ao computador.
+   - **Robô DENSO VS-050**: Controlador DENSO RC8 com servidor bCAP habilitado e endereço IP configurado (ex: `192.168.160.227`).
+   - **Smartphones Android**:
+     - *No modo `ip_camera`*: Aplicativo `Headless Android IP Camera` instalado e aberto na tela (porta 8080) na mesma rede Wi-Fi/LAN.
+     - *No modo `default_app`*: Depuração USB habilitada nas opções de desenvolvedor e conectado via cabo USB.
 
 ---
 
@@ -83,13 +82,13 @@ O arquivo `config.yaml` define todos os parâmetros operacionais:
 dry_run: true  # Defina como false para conectar ao hardware real
 
 robot:
-  ip_address: "192.168.0.1"
+  ip_address: "192.168.160.227"
   workspace_name: "VS_WORKSPACE"
   control_name: "DENSO_VS050"
   speed: 20.0                  # Velocidade do braço (0 a 100%)
   accel: 20.0                  # Aceleração (0 a 100%)
   decel: 20.0                  # Desaceleração (0 a 100%)
-  stabilization_delay_sec: 1.5 # Pausa de estabilização antes da foto (em segundos)
+  stabilization_delay_sec: 1.5 # Pausa de amortecimento antes da foto
   
   tcp_offset:                  # Deslocamento do Tool Center Point (TCP)
     x: 0.0                     # mm
@@ -101,35 +100,58 @@ robot:
     tag: "SMARTPHONE_TOOL"
 
 smartphone:
+  mode: "ip_camera"            # "ip_camera" (novo app Camera2) ou "default_app" (app nativo ADB)
+
+  # Configurações do modo "ip_camera" (HTTP / porta 8080)
+  ips:
+    - "192.168.158.48"
+  port: 8080
+  default_preset: "1_home_visao_geral"
+  stabilization_delay_sec: 0.5
+  presets:
+    "1_home_visao_geral":
+      focus_distance: 1.66     # Dioptrias
+      iso: 100
+      exposure_time_ns: 8333333 # ~8.33ms
+    "2_aproximacao_fina":
+      focus_distance: 5.0
+      iso: 100
+      exposure_time_ns: 10000000
+
+  # Configurações do modo "default_app" (legado ADB)
   serials:
-    - "auto"                   # "auto" para detectar todos os celulares USB via ADB
-  camera_names:                # Nomes amigáveis para as pastas dos dispositivos
-    "sim_serial_01": "cam_01_moto_edge_40"
-    "sim_serial_02": "cam_02_moto_g13"
+    - "auto"
   capture_delay_sec: 2.0
 
+  # Mapeamento comum de identificadores para nomes de pasta
+  camera_names:
+    "192.168.158.48": "cam_01_moto_edge_40"
+    "sim_serial_01": "cam_01_moto_edge_40"
+
 variations:
-  delta_trans_xy:              # P1 (Translação XY)
-    dx: 20.0                   # mm
-    dy: 15.0                   # mm
-  delta_rot_z: 15.0            # P2 (Rotação Rz / Junta 6 em graus)
-  delta_scale_z: -30.0         # P3 (Profundidade Z em mm)
-  delta_combined:              # P4 (Combinada)
-    dx: 15.0                   # mm
-    dy: 10.0                   # mm
-    dz: -20.0                  # mm
-    drz: 10.0                  # graus
+  delta_trans_xy:
+    dx: 20.0
+    dy: 15.0
+  delta_rot_z: 15.0
+  delta_scale_z: -30.0
+  delta_combined:
+    dx: 15.0
+    dy: 10.0
+    dz: -20.0
+    drz: 10.0
 
 scenes:
   - name: "scene_01"
-    description: "Enquadramento do Cenário 01"
+    description: "Enquadramento do Cenário 01 - Visão Geral"
+    camera_preset: "1_home_visao_geral"
     p0_pose:
-      cartesian: [440.0, 60.0, 585.0, 16.0, -22.0, 150.0, 1]  # [X, Y, Z, Rx, Ry, Rz, Fig]
+      cartesian: [440.0, 60.0, 585.0, 16.0, -22.0, 150.0, 1]
 
   - name: "scene_02"
-    description: "Enquadramento do Cenário 02"
+    description: "Enquadramento do Cenário 02 - Aproximação Fina"
+    camera_preset: "2_aproximacao_fina"
     p0_pose:
-      cartesian: [450.0, 70.0, 590.0, 16.0, -22.0, 150.0, 1]
+      cartesian: [440.0, 60.0, 585.0, 16.0, -22.0, 150.0, 1]
 
 dataset:
   output_dir: "assets/dataset"

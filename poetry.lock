@@ -1074,4 +1074,4 @@ ifaddr = ">=0.1.7"
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<3.14"
-content-hash = "bb8d7764eaf84706f773639fa55e20d7614d4700adffece12dea91665b9511f7"
+content-hash = "f6fdb61d23d1b6a53f7104b2fe3f75648f7b4665863bd0bc863fd3e1ba4f853c"

@@ -143,19 +143,78 @@ class RobotConfig:
         )
 
 
+DEFAULT_CAMERA_PRESETS: Dict[str, Dict[str, Any]] = {
+    "1_home_visao_geral": {
+        "focus_distance": 1.66,
+        "iso": 100,
+        "exposure_time_ns": 8333333,
+    },
+    "2_aproximacao_fina": {
+        "focus_distance": 5.0,
+        "iso": 100,
+        "exposure_time_ns": 10000000,
+    },
+    "3_camera_em_movimento": {
+        "focus_distance": 2.5,
+        "iso": 400,
+        "exposure_time_ns": 2000000,
+    },
+    "4_baixa_luminosidade": {
+        "focus_distance": 2.5,
+        "iso": 800,
+        "exposure_time_ns": 16666666,
+    },
+}
+
+
 @dataclass
 class SmartphoneConfig:
-    """Configuração dos smartphones Android para captura via ADB."""
+    """Configuração dos smartphones Android para captura de imagens (IP Camera ou App Padrão ADB)."""
+    mode: str = "ip_camera"  # "ip_camera" (NanoHTTPD / Camera2 manual) ou "default_app" (ADB / device_manager)
+    # Modo ip_camera (HTTP)
+    ips: List[str] = field(default_factory=list)
+    port: int = 8080
+    presets: Dict[str, Dict[str, Any]] = field(default_factory=lambda: dict(DEFAULT_CAMERA_PRESETS))
+    default_preset: Optional[str] = "1_home_visao_geral"
+    stabilization_delay_sec: float = 0.5
+    timeout_sec: float = 3.0
+    # Modo default_app (ADB)
     serials: List[str] = field(default_factory=list)
-    camera_names: Dict[str, str] = field(default_factory=dict)
     capture_delay_sec: float = 2.0
+    # Mapeamento comum de identificadores para nomes legíveis de pasta
+    camera_names: Dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "SmartphoneConfig":
+        mode = data.get("mode")
+        ips = data.get("ips", [])
+        serials = data.get("serials", [])
+
+        # Inferir modo caso não tenha sido explicitado
+        if not mode:
+            if ips and not serials:
+                mode = "ip_camera"
+            elif serials and not ips:
+                mode = "default_app"
+            else:
+                mode = "ip_camera"
+
+        user_presets = data.get("presets")
+        presets = dict(DEFAULT_CAMERA_PRESETS)
+        if user_presets and isinstance(user_presets, dict):
+            presets.update(user_presets)
+
         return cls(
-            serials=data.get("serials", []),
-            camera_names=data.get("camera_names", {}),
-            capture_delay_sec=data.get("capture_delay_sec", 2.0)
+            mode=mode,
+            ips=ips,
+            port=int(data.get("port", 8080)),
+            presets=presets,
+            default_preset=data.get("default_preset", "1_home_visao_geral"),
+            stabilization_delay_sec=float(data.get("stabilization_delay_sec", 0.5)),
+            timeout_sec=float(data.get("timeout_sec", 3.0)),
+            serials=serials,
+            capture_delay_sec=float(data.get("capture_delay_sec", 2.0)),
+            camera_names=data.get("camera_names", {})
         )
 
 
@@ -209,6 +268,7 @@ class SceneConfig:
     name: str = "scene_01"
     description: str = "Cenário de teste 01"
     p0_pose: BasePose = field(default_factory=BasePose)
+    camera_preset: Optional[str] = None
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "SceneConfig":
@@ -217,7 +277,8 @@ class SceneConfig:
         return cls(
             name=data.get("name", "scene_01"),
             description=data.get("description", ""),
-            p0_pose=p0_pose
+            p0_pose=p0_pose,
+            camera_preset=data.get("camera_preset")
         )
 
 

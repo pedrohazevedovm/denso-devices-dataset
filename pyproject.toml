@@ -11,7 +11,11 @@ requires-python = ">=3.10,<3.14"
 dependencies = [
     "aether-rdk @ file:///C:/Users/phavm/Documents/dev/python/visual-servoing-dataset/dependencies/aether_rdk-2.0.0-py3-none-any.whl",
     "device-manager @ file:///C:/Users/phavm/Documents/dev/python/visual-servoing-dataset/dependencies/device_manager-1.7.2-py3-none-any.whl",
-    "pyyaml (>=6.0.3,<7.0.0)"
+    "pyyaml (>=6.0.3,<7.0.0)",
+    "requests (>=2.31.0)",
+    "numpy (>=1.24.0)",
+    "opencv-python (>=4.8.0)",
+    "pillow (>=10.0.0)"
 ]
 
 

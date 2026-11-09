@@ -44,8 +44,8 @@ class DatasetCollector:
             return False
 
         # 3. Preparar câmeras nos smartphones
-        for serial in self.smartphone.connected_serials:
-            self.smartphone.prepare_camera(serial)
+        for device_id in self.smartphone.connected_devices:
+            self.smartphone.prepare_camera(device_id)
 
         # 4. Iterar sobre as Cenas
         logger.info("--- [Passo 3/4] Executando Poses e Capturas de Cenas ---")
@@ -54,6 +54,12 @@ class DatasetCollector:
         try:
             for scene_idx, scene_cfg in enumerate(self.config.scenes, start=1):
                 logger.info(f"\n==================== CENA {scene_idx:02d}: {scene_cfg.name} ====================")
+                
+                # Se a cena tiver preset específico de câmera configurado, aplica
+                if scene_cfg.camera_preset:
+                    logger.info(f"Aplicando preset de câmera da cena: '{scene_cfg.camera_preset}'")
+                    self.smartphone.apply_preset(scene_cfg.camera_preset)
+
                 waypoints = self.trajectory_generator.generate_waypoints_for_base_pose(scene_cfg.p0_pose)
                 
                 p0_pose_obj: Pose = scene_cfg.p0_pose.to_pose()
@@ -61,6 +67,7 @@ class DatasetCollector:
                 scene_metadata: Dict[str, Any] = {
                     "name": scene_cfg.name,
                     "description": scene_cfg.description,
+                    "camera_preset": scene_cfg.camera_preset,
                     "p0_base_pose": p0_pose_obj.to_list(),
                     "waypoints": []
                 }
@@ -79,14 +86,15 @@ class DatasetCollector:
                     actual_joint: Joint = self.robot.get_joints_pose()
 
                     captures_info: Dict[str, str] = {}
+                    camera_telemetry_info: Dict[str, Any] = {}
 
-                    # Capturar foto em cada smartphone conectado
-                    for serial in self.smartphone.connected_serials:
-                        cam_folder_name = self.smartphone.device_names.get(serial, serial)
+                    # Capturar foto em cada smartphone/câmera conectada
+                    for device_id in self.smartphone.connected_devices:
+                        cam_folder_name = self.smartphone.device_names.get(device_id, device_id)
                         target_cam_dir = self.output_dir / scene_cfg.name / cam_folder_name
                         
                         saved_path = self.smartphone.capture_and_save_photo(
-                            serial=serial,
+                            device_id=device_id,
                             target_dir=target_cam_dir,
                             target_filename=wp.filename
                         )
@@ -94,6 +102,9 @@ class DatasetCollector:
                         if saved_path:
                             rel_path = saved_path.relative_to(self.output_dir).as_posix()
                             captures_info[cam_folder_name] = rel_path
+                            telemetry = self.smartphone.get_last_telemetry(device_id)
+                            if telemetry:
+                                camera_telemetry_info[cam_folder_name] = telemetry
 
                     # Registrar metadados do waypoint usando as listas dos objetos Pose e Joint
                     wp_data = {
@@ -105,7 +116,8 @@ class DatasetCollector:
                         "actual_joint_pose": actual_joint.to_list(),
                         "delta_applied": wp.delta_applied,
                         "timestamp": datetime.now().isoformat(),
-                        "captures": captures_info
+                        "captures": captures_info,
+                        "camera_telemetry": camera_telemetry_info if camera_telemetry_info else None
                     }
                     scene_metadata["waypoints"].append(wp_data)
 
@@ -117,6 +129,11 @@ class DatasetCollector:
                 "dataset_version": "1.0",
                 "generated_at": datetime.now().isoformat(),
                 "dry_run": self.config.dry_run,
+                "camera_info": {
+                    "mode": self.config.smartphone.mode,
+                    "devices": self.smartphone.device_names,
+                    "presets": self.config.smartphone.presets if self.config.smartphone.mode == "ip_camera" else None
+                },
                 "robot_info": {
                     "model": "DENSO VS-050",
                     "ip_address": self.config.robot.ip_address,

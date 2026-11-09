@@ -76,13 +76,19 @@ def main():
         return
 
     if args.test_phone:
-        console.rule("[bold blue]Teste dos Smartphones Android[/bold blue]")
+        console.rule("[bold blue]Teste dos Smartphones / Câmeras Android[/bold blue]")
+        logger.info(f"Modo de Câmera configurado: [bold yellow]{config.smartphone.mode}[/bold yellow]")
         phone = SmartphoneController(config.smartphone, dry_run=config.dry_run)
         if phone.connect():
             test_dir = Path(config.dataset.output_dir) / "_test_captures"
-            for serial in phone.connected_ips:
-                phone.prepare_camera(serial)
-                phone.capture_and_save_photo(serial, test_dir, f"test_{serial}.jpg")
+            for dev in phone.connected_devices:
+                phone.prepare_camera(dev)
+                safe_dev_name = dev.replace(".", "_").replace(":", "_")
+                saved = phone.capture_and_save_photo(dev, test_dir, f"test_{safe_dev_name}.jpg")
+                if saved:
+                    telemetry = phone.get_last_telemetry(dev)
+                    if telemetry:
+                        logger.info(f"Telemetria recebida de {dev}: {telemetry}")
             phone.close_cameras()
             logger.info("Teste de smartphone concluído com SUCESSO!")
         else:
