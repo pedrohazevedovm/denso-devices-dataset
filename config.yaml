@@ -1,4 +1,4 @@
-# Configuração do Sistema de Coleta de Dataset Visual Servoing
+# Configuração do Sistema de Coleta de Dataset Visual Servoing (DENSO VS-050 + Cam-App)
 
 dry_run: false  # Defina como false quando estiver conectado ao robô e smartphone reais
 
@@ -9,8 +9,8 @@ robot:
   speed: 20.0                  # Velocidade do braço (0 a 100%)
   accel: 20.0                  # Aceleração (0 a 100%)
   decel: 20.0                  # Desaceleração (0 a 100%)
-  stabilization_delay_sec: 1.5 # Tempo de amortecimento/espera antes da foto
-  
+  stabilization_delay_sec: 1.5 # Tempo de amortecimento/espera mecânica antes da foto
+
   tcp_offset:                  # Deslocamento do Tool Center Point (TCP) da ferramenta/suporte
     x: 0.0                     # em mm
     y: 0.0                     # em mm
@@ -21,44 +21,47 @@ robot:
     tag: "SMARTPHONE_TOOL"
 
 smartphone:
-  mode: "ip_camera"            # Opções: "ip_camera" (novo app Camera2 manual HTTP) ou "default_app" (app nativo via ADB)
-
-  # --- Configurações do modo "ip_camera" (HTTP / NanoHTTPD na porta 8080) ---
+  # Endereço(s) IP do aplicativo Cam-App (HTTP / NanoHTTPD na porta 8080)
   ips:
-    - "192.168.158.48"         # Endereço IP do smartphone na rede Wi-Fi / LAN
+    - "192.168.155.44"
   port: 8080
-  default_preset: "1_home_visao_geral"
-  stabilization_delay_sec: 0.5 # Tempo de amortecimento para estabilização analógica do sensor após /config
+  stabilization_delay_sec: 1.0 # Tempo de acomodação física da lente (VCM) e ganhos do sensor após POST /config
   timeout_sec: 3.0
+  max_retries: 4
+  retry_backoff_sec: 0.5
+
+  # Apenas duas configurações são utilizadas: "auto" e "manual_calibrado"
+  active_presets:
+    - "auto"
+    - "manual_calibrado"
+
+  # Quando true, na pose inicial P0 o sistema coloca a câmera em "auto", captura 1 frame
+  # para ler lens_focus_distance, sensor_sensitivity (ISO) e sensor_exposure_time do X-Camera-Metadata
+  # e aplica automaticamente esses valores em "manual_calibrado".
+  auto_calibrate_manual: true
+
   presets:
-    "1_home_visao_geral":
-      focus_distance: 1.66     # Dioptrias (1 / 0.60m)
+    "auto":
+      control_mode: "auto"
+      focus_distance: 0.0
       iso: 100
-      exposure_time_ns: 8333333 # ~8.33ms (1/120s)
-    "2_aproximacao_fina":
-      focus_distance: 5.0      # 20cm
-      iso: 100
-      exposure_time_ns: 10000000 # 10ms (1/100s)
-    "3_camera_em_movimento":
-      focus_distance: 2.5      # 40cm
-      iso: 400
-      exposure_time_ns: 2000000  # 2ms (1/500s)
-    "4_baixa_luminosidade":
-      focus_distance: 2.5
-      iso: 800
-      exposure_time_ns: 16666666 # ~16.6ms (1/60s)
+      exposure_time_ns: 10000000
+      ois_enabled: true
+      eis_enabled: true
 
-  # --- Configurações do modo "default_app" (legado ADB / device_manager) ---
-  serials:
-    - "auto"                   # "auto" ou número de série do dispositivo USB conectado via ADB
-  capture_delay_sec: 2.0       # Tempo de espera após comando de foto
+    "manual_calibrado":
+      control_mode: "manual"
+      auto_calibrate: true       # Se false, usa os valores fixos abaixo sem sobrescrever pelo modo auto
+      focus_distance: 1.8621974  # Dioptrias (1 / distância_em_metros)
+      iso: 1141
+      exposure_time_ns: 16666660 # ~16.67 ms
+      ois_enabled: false
+      eis_enabled: false
 
-  # --- Mapeamento comum de identificadores (IP ou Serial) para o nome da pasta ---
+  # Mapeamento de IPs para o nome da pasta da câmera
   camera_names:
+    "192.168.155.44": "cam_01_moto_razr_60_ultra"
     "192.168.158.48": "cam_01_moto_edge_40"
-    "192.168.158.47": "cam_01_moto_edge_40"
-    "sim_serial_01": "cam_01_moto_edge_40"
-    "sim_serial_02": "cam_02_moto_g13"
 
 variations:
   delta_trans_xy:              # Variação P1 (Translação XY)
@@ -75,13 +78,17 @@ variations:
 scenes:
   - name: "scene_01"
     description: "Enquadramento do Cenário 01 - Visão Geral"
-    camera_preset: "1_home_visao_geral"
+    camera_presets:
+      - "auto"
+      - "manual_calibrado"
     p0_pose:
       cartesian: [440.0, 60.0, 585.0, 16.0, -22.0, 150.0, 1]
 
   - name: "scene_02"
     description: "Enquadramento do Cenário 02 - Aproximação Fina"
-    camera_preset: "2_aproximacao_fina"
+    camera_presets:
+      - "auto"
+      - "manual_calibrado"
     p0_pose:
       cartesian: [440.0, 60.0, 585.0, 16.0, -22.0, 150.0, 1]
 

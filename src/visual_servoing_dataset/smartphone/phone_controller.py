@@ -1,20 +1,17 @@
+import copy
+import json
 import time
-import shutil
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Mapping, Optional, Tuple, Any
 from PIL import Image, ImageDraw
 
+import cv2
+import numpy as np
 import requests
+from requests.exceptions import RequestException
 
 from ..config import SmartphoneConfig
 from ..utils.logger import logger
-
-try:
-    from device_manager import DeviceManager
-    DEVICE_MANAGER_AVAILABLE = True
-except ImportError:
-    DEVICE_MANAGER_AVAILABLE = False
-    DeviceManager = None
 
 
 def _create_simulated_image(
@@ -23,33 +20,180 @@ def _create_simulated_image(
     filename: str,
     extra_text: Optional[str] = None
 ) -> None:
-    """Gera uma imagem sintética para uso no modo dry-run / simulação."""
-    img = Image.new("RGB", (640, 480), color=(30, 34, 42))
+    """Gera uma imagem sintética 1920x1080 para uso no modo dry-run / simulação."""
+    img = Image.new("RGB", (1920, 1080), color=(30, 34, 42))
     draw = ImageDraw.Draw(img)
 
-    # Borda visual demonstrativa
-    draw.rectangle([(10, 10), (630, 470)], outline=(0, 200, 255), width=3)
-    draw.text((30, 30), f"Camera: {camera_name}", fill=(255, 255, 255))
-    draw.text((30, 60), f"File: {filename}", fill=(0, 255, 128))
-    draw.text((30, 90), f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}", fill=(200, 200, 200))
+    draw.rectangle([(20, 20), (1900, 1060)], outline=(0, 200, 255), width=4)
+    draw.text((40, 40), f"Camera: {camera_name}", fill=(255, 255, 255))
+    draw.text((40, 80), f"File: {filename}", fill=(0, 255, 128))
+    draw.text((40, 120), f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}", fill=(200, 200, 200))
     if extra_text:
-        draw.text((30, 120), extra_text, fill=(255, 200, 80))
+        draw.text((40, 160), extra_text, fill=(255, 200, 80))
 
     target_path.parent.mkdir(parents=True, exist_ok=True)
-    img.save(target_path, "JPEG")
+    img.save(target_path, "JPEG", quality=100)
 
 
-class IPCameraBackend:
-    """Backend para o aplicativo headless Android IP Camera (Camera2 HAL via HTTP)."""
+def parse_capture_headers(headers: Mapping[str, str]) -> Dict[str, Any]:
+    """Extrai o JSON completo do header X-Camera-Metadata e campos de conveniência do Cam-App."""
+    metadata: Dict[str, Any] = {}
+    raw_json_header = headers.get("X-Camera-Metadata")
+    if raw_json_header:
+        try:
+            parsed = json.loads(raw_json_header)
+            if isinstance(parsed, dict):
+                metadata.update(parsed)
+        except json.JSONDecodeError as exc:
+            logger.warning(f"Falha ao decodificar header JSON X-Camera-Metadata: {exc}")
+
+    exp_ns = metadata.get("sensor_exposure_time")
+    if exp_ns is None and "X-Camera-Exposure-Time-Ns" in headers:
+        try:
+            exp_ns = int(headers["X-Camera-Exposure-Time-Ns"])
+        except ValueError:
+            exp_ns = headers["X-Camera-Exposure-Time-Ns"]
+
+    exp_ms_header = headers.get("X-Camera-Exposure-Time-Ms")
+    if isinstance(exp_ns, (int, float)):
+        exp_ms_val: Any = round(float(exp_ns) / 1_000_000.0, 4)
+    elif exp_ms_header is not None:
+        try:
+            exp_ms_val = float(exp_ms_header)
+        except ValueError:
+            exp_ms_val = exp_ms_header
+    else:
+        exp_ms_val = None
+
+    focus_val = metadata.get("lens_focus_distance")
+    if focus_val is None and "X-Camera-Focus-Distance" in headers:
+        try:
+            focus_val = float(headers["X-Camera-Focus-Distance"])
+        except ValueError:
+            focus_val = headers["X-Camera-Focus-Distance"]
+
+    iso_val = metadata.get("sensor_sensitivity")
+    if iso_val is None and "X-Camera-ISO" in headers:
+        try:
+            iso_val = int(headers["X-Camera-ISO"])
+        except ValueError:
+            iso_val = headers["X-Camera-ISO"]
+
+    metadata.setdefault("focus_distance", focus_val)
+    metadata.setdefault("iso", iso_val)
+    metadata.setdefault("exposure_time_ns", exp_ns)
+    metadata.setdefault("exposure_time_ms", exp_ms_val)
+
+    if "sensor_timestamp" not in metadata and "X-Camera-Sensor-Timestamp" in headers:
+        try:
+            metadata["sensor_timestamp"] = int(headers["X-Camera-Sensor-Timestamp"])
+        except ValueError:
+            metadata["sensor_timestamp"] = headers["X-Camera-Sensor-Timestamp"]
+
+    return metadata
+
+
+def _build_simulated_metadata(params: Dict[str, Any], preset_name: str) -> Dict[str, Any]:
+    """Constrói metadados simulados compatíveis com as chaves do Cam-App para modo dry-run."""
+    is_auto = str(params.get("control_mode", "manual")).lower() == "auto"
+    focus_d = 1.8621974 if is_auto else float(params.get("focus_distance", 1.8621974))
+    iso_val = 1141 if is_auto else int(params.get("iso", 1141))
+    exp_ns = 16666660 if is_auto else int(params.get("exposure_time_ns", 16666660))
+    ois_on = bool(params.get("ois_enabled", is_auto))
+    eis_on = bool(params.get("eis_enabled", is_auto))
+
+    return {
+        "preset": preset_name,
+        "sensor_exposure_time": exp_ns,
+        "sensor_sensitivity": iso_val,
+        "sensor_timestamp": time.time_ns(),
+        "sensor_rolling_shutter_skew": 14192000,
+        "lens_focus_distance": focus_d,
+        "lens_focal_length": 4.52,
+        "lens_aperture": 1.7,
+        "lens_state": 0,
+        "lens_intrinsic_calibration": [1460.0, 1460.0, 960.0, 540.0, 0.0],
+        "camera_matrix_k": [1460.0, 0.0, 960.0, 0.0, 1460.0, 540.0, 0.0, 0.0, 1.0],
+        "camera_matrix_width": 1920,
+        "camera_matrix_height": 1080,
+        "control_ae_mode": 1 if is_auto else 0,
+        "control_af_mode": 4 if is_auto else 0,
+        "control_awb_mode": 1 if is_auto else 0,
+        "color_correction_mode": 2 if is_auto else 0,
+        "color_correction_gains": {
+            "red": 1.8,
+            "green_even": 1.0,
+            "green_odd": 1.0,
+            "blue": 1.6,
+        },
+        "color_correction_transform": [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        "lens_optical_stabilization_mode": 1 if ois_on else 0,
+        "control_video_stabilization_mode": 1 if eis_on else 0,
+        "noise_reduction_mode": 2 if is_auto else 0,
+        "edge_mode": 2 if is_auto else 0,
+        "color_correction_aberration_mode": 2 if is_auto else 0,
+        "scaler_crop_region": {"left": 0, "top": 0, "right": 4096, "bottom": 2304},
+        "jpeg_quality": 100,
+        "focus_distance": focus_d,
+        "iso": iso_val,
+        "exposure_time_ns": exp_ns,
+        "exposure_time_ms": round(exp_ns / 1_000_000.0, 4),
+        "capture_latency_ms": 45.0,
+    }
+
+
+def _to_config_payload(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Filtra e formata o dicionário de preset para o JSON esperado pelo POST /config do Cam-App."""
+    control_mode = str(params.get("control_mode", "manual")).lower()
+    is_auto = control_mode == "auto"
+    return {
+        "control_mode": "auto" if is_auto else "manual",
+        "auto_mode": is_auto,
+        "focus_distance": float(params.get("focus_distance", 0.0)),
+        "iso": int(params.get("iso", 100)),
+        "exposure_time_ns": int(params.get("exposure_time_ns", 10000000)),
+        "ois_enabled": bool(params.get("ois_enabled", is_auto)),
+        "eis_enabled": bool(params.get("eis_enabled", is_auto)),
+    }
+
+
+class SmartphoneController:
+    """Controlador HTTP para o aplicativo Android Cam-App (Camera2 HAL Server na porta 8080).
+
+    Opera exclusivamente com duas configurações de câmera no Cam-App:
+      - 'auto': Modo 3A (AF, AE, AWB) + filtros ISP + OIS/EIS ativados.
+      - 'manual_calibrado': Modo manual estrito (3A, ISP, OIS e EIS desligados) com
+        foco, ISO e tempo de exposição calibrados a partir do modo 'auto' (ou fixados no config.yaml).
+    """
 
     def __init__(self, config: SmartphoneConfig, dry_run: bool = False):
         self.config = config
         self.dry_run = dry_run
         self.session = requests.Session()
+        self.session.headers.update({
+            "User-Agent": "VisualServoingDatasetCollector/2.0",
+            "Accept": "*/*",
+        })
         self.connected_devices: List[str] = []
         self.device_names: Dict[str, str] = {}
-        self.last_telemetry: Dict[str, Dict[str, Any]] = {}
+        self.device_info: Dict[str, Dict[str, Any]] = {}
+        self.device_presets: Dict[str, Dict[str, Dict[str, Any]]] = {}
         self.current_presets: Dict[str, str] = {}
+        self.last_applied_settings: Dict[str, Dict[str, Any]] = {}
+        self.last_telemetry: Dict[str, Dict[str, Any]] = {}
+
+        logger.info(
+            "Controlador Cam-App HTTP inicializado (configs ativas: [bold yellow]%s[/bold yellow])",
+            ", ".join(self.config.active_presets),
+        )
+
+    @property
+    def connected_ips(self) -> List[str]:
+        return self.connected_devices
 
     def _get_base_url(self, device_id: str) -> str:
         if ":" in device_id:
@@ -57,16 +201,23 @@ class IPCameraBackend:
         return f"http://{device_id}:{self.config.port}"
 
     def connect(self) -> bool:
-        logger.info(f"--- [IP Camera] Conectando aos dispositivos via HTTP (Porta {self.config.port}) ---")
+        """Testa conexão HTTP com todos os smartphones configurados via GET /status."""
+        logger.info(f"--- [Cam-App] Conectando aos smartphones via HTTP (Porta {self.config.port}) ---")
 
         if self.dry_run:
-            logger.info("[DRY-RUN] Simulação de conexão com IP Camera Android.")
-            target_ips = self.config.ips if self.config.ips else ["192.168.158.48"]
-            self.connected_devices = target_ips
+            logger.info("[DRY-RUN] Simulação de conexão com Cam-App Android.")
+            target_ips = self.config.ips if self.config.ips else ["192.168.155.44"]
+            self.connected_devices = list(target_ips)
             self._resolve_device_names()
             for dev in self.connected_devices:
+                self.device_presets[dev] = copy.deepcopy(self.config.presets)
+                self.device_info[dev] = {
+                    "status": "online",
+                    "device_model": "Simulated Moto Razr 60 Ultra",
+                    "android_version": "15",
+                }
                 name = self.device_names.get(dev, dev)
-                logger.info(f"[DRY-RUN] Câmera IP simulada: {name} (IP: {dev})")
+                logger.info(f"[DRY-RUN] Cam-App simulado: {name} (IP: {dev})")
             return True
 
         if not self.config.ips:
@@ -78,7 +229,7 @@ class IPCameraBackend:
             base_url = self._get_base_url(ip)
             status_url = f"{base_url}/status"
             try:
-                logger.info(f"Testando conexão com Câmera IP: {status_url}")
+                logger.info(f"Verificando Cam-App em: {status_url}")
                 resp = self.session.get(status_url, timeout=self.config.timeout_sec)
                 if resp.status_code == 200:
                     data = resp.json()
@@ -86,99 +237,252 @@ class IPCameraBackend:
                     android_ver = data.get("android_version", "Desconhecido")
                     captures = data.get("captures_served", 0)
                     logger.info(
-                        f"Câmera IP online: {ip} | Modelo: {model} (Android {android_ver}) | Capturas prévias: {captures}"
+                        f"Cam-App online: {ip} | Modelo: {model} (Android {android_ver}) | Capturas prévias: {captures}"
                     )
                     self.connected_devices.append(ip)
+                    self.device_info[ip] = data
+                    self.device_presets[ip] = copy.deepcopy(self.config.presets)
                 else:
-                    logger.warning(f"Câmera IP {ip} respondeu com status {resp.status_code}")
+                    logger.warning(f"Cam-App {ip} respondeu com status {resp.status_code}")
             except Exception as e:
-                logger.warning(f"Não foi possível conectar à Câmera IP {ip}: {e}")
+                logger.warning(f"Não foi possível conectar ao Cam-App em {ip}: {e}")
 
         self._resolve_device_names()
         if self.connected_devices:
-            logger.info(f"Total de Câmeras IP conectadas com sucesso: {len(self.connected_devices)}")
+            logger.info(f"Total de dispositivos Cam-App conectados: {len(self.connected_devices)}")
             return True
 
-        logger.error("Nenhuma Câmera IP respondeu na rede. Verifique o Wi-Fi e se o aplicativo está aberto.")
+        logger.error("Nenhum smartphone respondeu na rede. Verifique o IP e se o Cam-App está aberto.")
         return False
 
-    def prepare_camera(self, device_id: str, preset_name: Optional[str] = None) -> bool:
-        device_label = self.device_names.get(device_id, device_id)
-        target_preset = preset_name or self.config.default_preset
+    def get_device_presets(self, device_id: str) -> Dict[str, Dict[str, Any]]:
+        """Retorna os presets ('auto' e 'manual_calibrado') ativos para um dispositivo específico."""
+        if device_id not in self.device_presets:
+            self.device_presets[device_id] = copy.deepcopy(self.config.presets)
+        return self.device_presets[device_id]
 
-        logger.info(f"Preparando Câmera IP {device_label}...")
-        if target_preset:
-            return self.apply_preset(target_preset, device_id=device_id)
+    def calibrate_manual_from_auto(
+        self,
+        device_id: Optional[str] = None,
+        force: bool = False
+    ) -> Dict[str, Dict[str, Any]]:
+        """Calibra os parâmetros de 'manual_calibrado' com base na leitura real do modo 'auto'.
+
+        Fluxo:
+          1. Aplica o preset 'auto' no Cam-App e aguarda acomodação do 3A (AF/AE/AWB).
+          2. Realiza uma captura de referência em GET /capture e extrai do X-Camera-Metadata:
+             - lens_focus_distance (dioptrias)
+             - sensor_sensitivity (ISO)
+             - sensor_exposure_time (ns)
+          3. Atualiza o preset 'manual_calibrado' do dispositivo com esses parâmetros e
+             control_mode='manual', ois_enabled=False, eis_enabled=False.
+        """
+        targets = [device_id] if device_id else self.connected_devices
+        calibrated_by_device: Dict[str, Dict[str, Any]] = {}
+
+        for dev in targets:
+            device_label = self.device_names.get(dev, dev)
+            presets = self.get_device_presets(dev)
+            manual_cfg = presets.get("manual_calibrado", {})
+            should_auto_calibrate = force or bool(
+                manual_cfg.get("auto_calibrate", self.config.auto_calibrate_manual)
+            )
+
+            if not should_auto_calibrate:
+                logger.info(
+                    f"[{device_label}] 'auto_calibrate' desativado para 'manual_calibrado'. "
+                    f"Usando parâmetros fixos do config.yaml: "
+                    f"Foco={manual_cfg.get('focus_distance')} D, "
+                    f"ISO={manual_cfg.get('iso')}, "
+                    f"Exp={manual_cfg.get('exposure_time_ns')} ns"
+                )
+                calibrated_by_device[dev] = copy.deepcopy(manual_cfg)
+                continue
+
+            logger.info(
+                f"[{device_label}] Calibrando 'manual_calibrado' a partir do modo 'auto'..."
+            )
+            if not self.apply_preset("auto", device_id=dev):
+                logger.warning(
+                    f"[{device_label}] Falha ao aplicar modo 'auto' para calibração. "
+                    f"Mantendo valores padrão de 'manual_calibrado'."
+                )
+                calibrated_by_device[dev] = copy.deepcopy(manual_cfg)
+                continue
+
+            if self.dry_run:
+                sim_meta = _build_simulated_metadata(presets["auto"], "auto")
+                focus_d = float(sim_meta["lens_focus_distance"])
+                iso_val = int(sim_meta["sensor_sensitivity"])
+                exp_ns = int(sim_meta["sensor_exposure_time"])
+            else:
+                _, raw_bytes, meta = self._capture_raw(dev)
+                if not raw_bytes or not meta:
+                    logger.warning(
+                        f"[{device_label}] Falha ao capturar frame de referência no modo 'auto'. "
+                        f"Mantendo valores de fallback em 'manual_calibrado'."
+                    )
+                    calibrated_by_device[dev] = copy.deepcopy(manual_cfg)
+                    continue
+
+                focus_d = float(
+                    meta.get("lens_focus_distance", meta.get("focus_distance", manual_cfg.get("focus_distance", 0.0)))
+                )
+                iso_val = int(
+                    meta.get("sensor_sensitivity", meta.get("iso", manual_cfg.get("iso", 100)))
+                )
+                exp_ns = int(
+                    meta.get("sensor_exposure_time", meta.get("exposure_time_ns", manual_cfg.get("exposure_time_ns", 10000000)))
+                )
+
+            presets["manual_calibrado"].update({
+                "control_mode": "manual",
+                "focus_distance": focus_d,
+                "iso": iso_val,
+                "exposure_time_ns": exp_ns,
+                "ois_enabled": False,
+                "eis_enabled": False,
+                "calibrated_from_auto": True,
+            })
+            calibrated_by_device[dev] = copy.deepcopy(presets["manual_calibrado"])
+            logger.info(
+                f"[{device_label}] 'manual_calibrado' calibrado pelo modo 'auto': "
+                f"Foco={focus_d:.4f} D | ISO={iso_val} | Exposição={exp_ns} ns ({exp_ns / 1e6:.2f} ms)"
+            )
+
+        return calibrated_by_device
+
+    def prepare_camera(self, device_id: str, preset_name: Optional[str] = None) -> bool:
+        """Prepara a câmera aplicando um preset inicial caso especificado."""
+        device_label = self.device_names.get(device_id, device_id)
+        logger.info(f"Preparando Cam-App em {device_label}...")
+        if preset_name:
+            return self.apply_preset(preset_name, device_id=device_id)
         return True
 
     def apply_preset(self, preset_name: str, device_id: Optional[str] = None) -> bool:
+        """Envia os parâmetros do preset ('auto' ou 'manual_calibrado') via POST /config."""
         targets = [device_id] if device_id else self.connected_devices
-        if preset_name not in self.config.presets:
-            logger.warning(f"Preset '{preset_name}' não encontrado nas configurações. Mantendo parâmetros atuais.")
-            return False
-
-        params = self.config.presets[preset_name]
         success = True
 
         for dev in targets:
             device_label = self.device_names.get(dev, dev)
-            logger.info(f"Aplicando preset '{preset_name}' em {device_label}: {params}")
+            presets = self.get_device_presets(dev)
+            if preset_name not in presets:
+                logger.error(
+                    f"Configuração de câmera '{preset_name}' não encontrada em {device_label}. "
+                    f"Opções válidas: {list(presets.keys())}"
+                )
+                success = False
+                continue
+
+            raw_params = presets[preset_name]
+            payload = _to_config_payload(raw_params)
+            logger.info(f"Aplicando configuração '{preset_name}' em {device_label}: {payload}")
 
             if self.dry_run:
                 self.current_presets[dev] = preset_name
-                self.last_telemetry[dev] = {
-                    "preset": preset_name,
-                    "focus_distance_diopters": params.get("focus_distance", 2.0),
-                    "iso": params.get("iso", 100),
-                    "exposure_time_ns": params.get("exposure_time_ns", 10000000),
-                    "exposure_time_ms": params.get("exposure_time_ns", 10000000) / 1e6
-                }
-                time.sleep(0.1)
+                self.last_applied_settings[dev] = dict(payload)
+                self.last_telemetry[dev] = _build_simulated_metadata(payload, preset_name)
+                time.sleep(0.05)
                 continue
 
-            config_url = f"{self._get_base_url(dev)}/config"
-            try:
-                resp = self.session.post(config_url, json=params, timeout=self.config.timeout_sec)
-                if resp.status_code == 200:
-                    self.current_presets[dev] = preset_name
-                    logger.info(f"Preset '{preset_name}' aplicado com sucesso em {device_label}.")
-                else:
-                    logger.error(f"Falha ao aplicar preset em {device_label}. Status: {resp.status_code}")
-                    success = False
-            except Exception as e:
-                logger.error(f"Erro de rede ao enviar preset para {device_label}: {e}")
+            if self._post_config_with_retry(dev, payload):
+                self.current_presets[dev] = preset_name
+                logger.info(
+                    f"Configuração '{preset_name}' aplicada em {device_label} "
+                    f"(applied_settings={self.last_applied_settings.get(dev)})"
+                )
+            else:
                 success = False
 
-        if self.config.stabilization_delay_sec > 0:
+        if not self.dry_run and self.config.stabilization_delay_sec > 0:
+            logger.info(
+                f"Aguardando {self.config.stabilization_delay_sec:.2f}s para acomodação física da lente (VCM) e sensor..."
+            )
             time.sleep(self.config.stabilization_delay_sec)
 
         return success
 
     def configure_camera(self, device_id: str, params: Dict[str, Any]) -> bool:
-        device_label = self.device_names.get(device_id, device_id)
-        logger.info(f"Configurando parâmetros manuais em {device_label}: {params}")
-
+        """Envia um dicionário customizado de parâmetros para POST /config."""
+        payload = _to_config_payload(params)
         if self.dry_run:
-            self.last_telemetry[device_id] = {
-                "focus_distance_diopters": params.get("focus_distance", 2.0),
-                "iso": params.get("iso", 100),
-                "exposure_time_ns": params.get("exposure_time_ns", 10000000),
-                "exposure_time_ms": params.get("exposure_time_ns", 10000000) / 1e6
-            }
+            self.last_applied_settings[device_id] = dict(payload)
+            self.last_telemetry[device_id] = _build_simulated_metadata(payload, "custom")
             return True
 
+        ok = self._post_config_with_retry(device_id, payload)
+        if ok and self.config.stabilization_delay_sec > 0:
+            time.sleep(self.config.stabilization_delay_sec)
+        return ok
+
+    def _post_config_with_retry(self, device_id: str, payload: Dict[str, Any]) -> bool:
+        device_label = self.device_names.get(device_id, device_id)
         config_url = f"{self._get_base_url(device_id)}/config"
-        try:
-            resp = self.session.post(config_url, json=params, timeout=self.config.timeout_sec)
-            if resp.status_code == 200:
-                if self.config.stabilization_delay_sec > 0:
-                    time.sleep(self.config.stabilization_delay_sec)
-                return True
-            logger.error(f"Erro ao configurar {device_label}. Status: {resp.status_code}")
-            return False
-        except Exception as e:
-            logger.error(f"Erro ao comunicar com {device_label}: {e}")
-            return False
+
+        for attempt in range(1, self.config.max_retries + 1):
+            try:
+                resp = self.session.post(config_url, json=payload, timeout=self.config.timeout_sec)
+                if resp.status_code == 200:
+                    try:
+                        body = resp.json()
+                        self.last_applied_settings[device_id] = body.get("applied_settings", dict(payload))
+                    except ValueError:
+                        self.last_applied_settings[device_id] = dict(payload)
+                    return True
+
+                logger.warning(
+                    f"[{device_label}] Tentativa {attempt}/{self.config.max_retries}: "
+                    f"POST /config retornou status {resp.status_code} ({resp.text})"
+                )
+            except RequestException as exc:
+                logger.warning(
+                    f"[{device_label}] Tentativa {attempt}/{self.config.max_retries} falhou em POST /config: {exc}"
+                )
+
+            if attempt < self.config.max_retries:
+                time.sleep(self.config.retry_backoff_sec * (2 ** (attempt - 1)))
+
+        logger.error(f"[{device_label}] Esgotadas as {self.config.max_retries} tentativas em POST /config.")
+        return False
+
+    def _capture_raw(self, device_id: str) -> Tuple[Optional[np.ndarray], Optional[bytes], Dict[str, Any]]:
+        """Executa GET /capture com retentativas e extrai bytes JPEG e X-Camera-Metadata completo."""
+        device_label = self.device_names.get(device_id, device_id)
+        capture_url = f"{self._get_base_url(device_id)}/capture"
+
+        for attempt in range(1, self.config.max_retries + 1):
+            try:
+                start_t = time.perf_counter()
+                resp = self.session.get(capture_url, timeout=self.config.timeout_sec)
+                elapsed_ms = round((time.perf_counter() - start_t) * 1000.0, 2)
+
+                if resp.status_code == 200 and resp.content:
+                    raw_jpeg_bytes = bytes(resp.content)
+                    img_array = np.frombuffer(raw_jpeg_bytes, dtype=np.uint8)
+                    frame = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+
+                    if frame is not None and frame.size > 0:
+                        metadata = parse_capture_headers(resp.headers)
+                        metadata["capture_latency_ms"] = elapsed_ms
+                        return frame, raw_jpeg_bytes, metadata
+
+                    logger.warning(f"[{device_label}] Tentativa {attempt}: Frame JPEG decodificado vazio ou corrompido.")
+                else:
+                    logger.warning(
+                        f"[{device_label}] Tentativa {attempt}: GET /capture retornou status {resp.status_code}."
+                    )
+            except RequestException as exc:
+                logger.warning(
+                    f"[{device_label}] Tentativa {attempt}/{self.config.max_retries} erro de rede em GET /capture: {exc}"
+                )
+
+            if attempt < self.config.max_retries:
+                time.sleep(self.config.retry_backoff_sec * (2 ** (attempt - 1)))
+
+        logger.error(f"[{device_label}] Falha ao capturar frame após {self.config.max_retries} tentativas.")
+        return None, None, {}
 
     def capture_and_save_photo(
         self,
@@ -186,57 +490,60 @@ class IPCameraBackend:
         target_dir: Path,
         target_filename: str
     ) -> Optional[Path]:
+        """Captura foto via GET /capture no Cam-App, extrai X-Camera-Metadata e salva os bytes JPEG."""
         device_label = self.device_names.get(device_id, device_id)
         target_dir.mkdir(parents=True, exist_ok=True)
         final_path = target_dir / target_filename
+        active_preset = self.current_presets.get(device_id, "auto")
 
-        logger.info(f"[IP Camera] Capturando foto com {device_label} -> {final_path}")
+        logger.info(
+            f"[Cam-App] Capturando foto ({active_preset}) com {device_label} -> {final_path}"
+        )
 
         if self.dry_run:
-            preset = self.current_presets.get(device_id, self.config.default_preset or "default")
-            extra = f"Preset: {preset} (Simulated Camera2 HTTP)"
+            presets = self.get_device_presets(device_id)
+            params = presets.get(active_preset, {})
+            sim_meta = _build_simulated_metadata(params, active_preset)
+            self.last_telemetry[device_id] = sim_meta
+            extra = (
+                f"Preset: {active_preset} | Mode: {params.get('control_mode', 'auto')} | "
+                f"Focus: {sim_meta['lens_focus_distance']:.2f}D | ISO: {sim_meta['sensor_sensitivity']} | "
+                f"Exp: {sim_meta['exposure_time_ms']}ms"
+            )
             _create_simulated_image(final_path, device_label, target_filename, extra_text=extra)
-            time.sleep(0.1)
+            time.sleep(0.05)
             return final_path
 
-        capture_url = f"{self._get_base_url(device_id)}/capture"
-        try:
-            resp = self.session.get(capture_url, timeout=self.config.timeout_sec)
-            if resp.status_code == 200:
-                # Extrair telemetria dos headers HTTP retornados pelo app
-                focus_dist = resp.headers.get("X-Camera-Focus-Distance")
-                iso = resp.headers.get("X-Camera-ISO")
-                exp_ns = resp.headers.get("X-Camera-Exposure-Time-Ns")
-                exp_ms = resp.headers.get("X-Camera-Exposure-Time-Ms")
+        frame, raw_jpeg_bytes, metadata = self._capture_raw(device_id)
+        if frame is not None and raw_jpeg_bytes is not None:
+            metadata["preset"] = active_preset
+            self.last_telemetry[device_id] = metadata
 
-                telemetry: Dict[str, Any] = {}
-                if focus_dist is not None:
-                    telemetry["focus_distance_diopters"] = float(focus_dist)
-                if iso is not None:
-                    telemetry["iso"] = int(iso)
-                if exp_ns is not None:
-                    telemetry["exposure_time_ns"] = int(exp_ns)
-                if exp_ms is not None:
-                    telemetry["exposure_time_ms"] = float(exp_ms)
+            if metadata.get("lens_state") == 1:
+                logger.warning(
+                    f"[{device_label}] Atenção: Frame {target_filename} capturado com lente em movimento (lens_state=1)!"
+                )
 
-                self.last_telemetry[device_id] = telemetry
+            final_path.write_bytes(raw_jpeg_bytes)
+            logger.info(
+                f"Foto salva ({len(raw_jpeg_bytes)} bytes) | Preset: {active_preset} | "
+                f"Foco: {metadata.get('lens_focus_distance')} D | ISO: {metadata.get('sensor_sensitivity')} | "
+                f"Exp: {metadata.get('exposure_time_ms')} ms | Latência: {metadata.get('capture_latency_ms')} ms"
+            )
+            return final_path
 
-                # Gravar diretamente os bytes JPEG originais
-                final_path.write_bytes(resp.content)
-                logger.info(f"Foto salva ({len(resp.content)} bytes). Telemetria: {telemetry}")
-                return final_path
-            else:
-                logger.error(f"Falha na captura em {device_label}. Status: {resp.status_code}")
-                return None
-        except Exception as e:
-            logger.error(f"Erro ao capturar foto em {device_label}: {e}")
-            return None
+        return None
 
     def get_last_telemetry(self, device_id: str) -> Optional[Dict[str, Any]]:
+        """Retorna o dicionário completo de metadados (X-Camera-Metadata) da última captura."""
         return self.last_telemetry.get(device_id)
 
+    def get_last_applied_settings(self, device_id: str) -> Optional[Dict[str, Any]]:
+        """Retorna o applied_settings retornado pelo Cam-App no último POST /config."""
+        return self.last_applied_settings.get(device_id)
+
     def close_cameras(self) -> None:
-        logger.info("Encerrando sessão HTTP das Câmeras IP...")
+        logger.info("Encerrando sessão HTTP com o Cam-App...")
         try:
             self.session.close()
         except Exception:
@@ -250,243 +557,3 @@ class IPCameraBackend:
             else:
                 name = f"cam_{idx:02d}_{dev.replace('.', '_').replace(':', '_')}"
             self.device_names[dev] = name
-
-
-class ADBCameraBackend:
-    """Backend legado para o aplicativo nativo de câmera via ADB (device_manager)."""
-
-    def __init__(self, config: SmartphoneConfig, dry_run: bool = False):
-        self.config = config
-        self.dry_run = dry_run or not DEVICE_MANAGER_AVAILABLE
-        self.device_manager: Optional[Any] = None
-        self.connected_devices: List[str] = []
-        self.device_names: Dict[str, str] = {}
-
-    def connect(self) -> bool:
-        logger.info("--- [App Padrão ADB] Conectando aos smartphones Android via ADB ---")
-
-        if self.dry_run:
-            logger.info("[DRY-RUN] Simulação de conexão com smartphones Android (modo App Padrão).")
-            if self.config.serials and "auto" not in self.config.serials:
-                self.connected_devices = self.config.serials
-            else:
-                self.connected_devices = ["sim_serial_01", "sim_serial_02"]
-
-            self._resolve_device_names()
-            for serial, name in self.device_names.items():
-                logger.info(f"[DRY-RUN] Smartphone simulado: {name} (Serial: {serial})")
-            return True
-
-        if not DEVICE_MANAGER_AVAILABLE:
-            logger.error("A biblioteca 'device_manager' não está disponível para o modo 'default_app'!")
-            return False
-
-        try:
-            logger.info("Inicializando DeviceManager e carregando dispositivos Android...")
-            self.device_manager = DeviceManager()
-
-            visible_devices = self.device_manager.connector.visible_devices()
-            target_serials = []
-
-            if self.config.serials and "auto" not in self.config.serials:
-                for dev in visible_devices:
-                    if dev.serial_number in self.config.serials or getattr(dev, "ip", None) in self.config.serials:
-                        target_serials.append(dev.serial_number)
-                if not target_serials:
-                    target_serials = self.config.serials
-            else:
-                target_serials = [dev.serial_number for dev in visible_devices]
-
-            if target_serials:
-                self.connected_devices = self.device_manager.connect_devices(*target_serials)
-            else:
-                self.connected_devices = self.device_manager.connected_devices
-
-            self._resolve_device_names()
-            for serial in self.connected_devices:
-                logger.info(f"Smartphone conectado: {self.device_names.get(serial, serial)} (Serial: {serial})")
-
-            return len(self.connected_devices) > 0
-
-        except Exception as e:
-            logger.error(f"Erro ao conectar aos smartphones via ADB: {e}")
-            return False
-
-    def prepare_camera(self, device_id: str, preset_name: Optional[str] = None) -> bool:
-        device_label = self.device_names.get(device_id, device_id)
-        logger.info(f"Preparando aplicativo de câmera nativo em {device_label}...")
-
-        if self.dry_run:
-            logger.info(f"[DRY-RUN] Câmera preparada e pronta em {device_label}.")
-            return True
-
-        if not self.device_manager or device_id not in self.connected_devices:
-            logger.error(f"Dispositivo {device_id} não está conectado.")
-            return False
-
-        try:
-            actions = self.device_manager.get_device_actions(device_id)
-            actions.turn_on_and_unlock_screen()
-            actions.camera.open()
-            time.sleep(1.0)
-            return True
-        except Exception as e:
-            logger.error(f"Erro ao preparar câmera em {device_label}: {e}")
-            return False
-
-    def apply_preset(self, preset_name: str, device_id: Optional[str] = None) -> bool:
-        # Modo default_app não suporta ajuste dinâmico de parâmetros de sensor
-        logger.debug(f"[App Padrão ADB] Reconfiguração por preset ignorada (modo default_app).")
-        return True
-
-    def configure_camera(self, device_id: str, params: Dict[str, Any]) -> bool:
-        logger.debug(f"[App Padrão ADB] Reconfiguração manual ignorada (modo default_app).")
-        return True
-
-    def capture_and_save_photo(
-        self,
-        device_id: str,
-        target_dir: Path,
-        target_filename: str
-    ) -> Optional[Path]:
-        device_label = self.device_names.get(device_id, device_id)
-        target_dir.mkdir(parents=True, exist_ok=True)
-        final_path = target_dir / target_filename
-
-        logger.info(f"[App Padrão ADB] Capturando foto com {device_label} -> {final_path}")
-
-        if self.dry_run:
-            _create_simulated_image(final_path, device_label, target_filename, extra_text="Modo: App Padrão ADB (Simulado)")
-            time.sleep(0.3)
-            return final_path
-
-        if not self.device_manager or device_id not in self.connected_devices:
-            logger.error(f"Dispositivo {device_id} não está conectado.")
-            return None
-
-        try:
-            actions = self.device_manager.get_device_actions(device_id)
-
-            # Disparar foto
-            actions.camera.take_picture()
-            if self.config.capture_delay_sec > 0:
-                time.sleep(self.config.capture_delay_sec)
-
-            # Baixar a foto mais recente
-            temp_download_dir = target_dir / "_temp"
-            temp_download_dir.mkdir(parents=True, exist_ok=True)
-
-            actions.camera.pull_pictures(destination=temp_download_dir, amount=1)
-
-            downloaded_files = (
-                list(temp_download_dir.glob("*.jpg")) +
-                list(temp_download_dir.glob("*.jpeg")) +
-                list(temp_download_dir.glob("*.png"))
-            )
-            if downloaded_files:
-                latest_file = max(downloaded_files, key=lambda f: f.stat().st_mtime)
-                shutil.move(str(latest_file), str(final_path))
-                shutil.rmtree(str(temp_download_dir), ignore_errors=True)
-                logger.info(f"Foto salva com sucesso em: {final_path}")
-                return final_path
-            else:
-                logger.error(f"Nenhum arquivo baixado de {device_label} em {temp_download_dir}")
-                shutil.rmtree(str(temp_download_dir), ignore_errors=True)
-                return None
-
-        except Exception as e:
-            logger.error(f"Erro ao capturar/baixar foto de {device_label}: {e}")
-            return None
-
-    def get_last_telemetry(self, device_id: str) -> Optional[Dict[str, Any]]:
-        return None
-
-    def close_cameras(self) -> None:
-        logger.info("Encerrando aplicativo de câmera nativo nos smartphones...")
-        if self.dry_run or not self.device_manager:
-            return
-
-        for serial in self.connected_devices:
-            try:
-                actions = self.device_manager.get_device_actions(serial)
-                actions.camera.close()
-            except Exception as e:
-                logger.warning(f"Erro ao fechar câmera no serial {serial}: {e}")
-
-    def _resolve_device_names(self) -> None:
-        self.device_names.clear()
-        for idx, serial in enumerate(self.connected_devices, start=1):
-            if serial in self.config.camera_names:
-                name = self.config.camera_names[serial]
-            else:
-                name = f"cam_{idx:02d}_{serial}"
-            self.device_names[serial] = name
-
-
-class SmartphoneController:
-    """Controlador unificado para câmeras de smartphone (suporta 'ip_camera' e 'default_app')."""
-
-    def __init__(self, config: SmartphoneConfig, dry_run: bool = False):
-        self.config = config
-        self.dry_run = dry_run
-
-        mode_str = (config.mode or "ip_camera").lower().strip()
-        if mode_str in ["adb", "default", "default_app", "stock", "oem"]:
-            self.mode = "default_app"
-            self.backend = ADBCameraBackend(config, dry_run=dry_run)
-        else:
-            self.mode = "ip_camera"
-            self.backend = IPCameraBackend(config, dry_run=dry_run)
-
-        logger.info(f"Controlador de Câmera inicializado no modo: [bold yellow]{self.mode}[/bold yellow]")
-
-    @property
-    def connected_devices(self) -> List[str]:
-        return self.backend.connected_devices
-
-    @property
-    def connected_serials(self) -> List[str]:
-        """Alias para manter compatibilidade com código existente."""
-        return self.backend.connected_devices
-
-    @property
-    def connected_ips(self) -> List[str]:
-        """Alias para manter compatibilidade com chamadas baseadas em IP."""
-        return self.backend.connected_devices
-
-    @property
-    def device_names(self) -> Dict[str, str]:
-        return self.backend.device_names
-
-    def connect(self) -> bool:
-        """Conecta aos dispositivos de câmera no modo configurado."""
-        return self.backend.connect()
-
-    def prepare_camera(self, device_id: str, preset_name: Optional[str] = None) -> bool:
-        """Prepara o smartphone/câmera para captura."""
-        return self.backend.prepare_camera(device_id, preset_name=preset_name)
-
-    def apply_preset(self, preset_name: str, device_id: Optional[str] = None) -> bool:
-        """Aplica um preset fotográfico nos dispositivos (efetivo no modo ip_camera)."""
-        return self.backend.apply_preset(preset_name, device_id=device_id)
-
-    def configure_camera(self, device_id: str, params: Dict[str, Any]) -> bool:
-        """Aplica parâmetros fotográficos manuais dinamicamente."""
-        return self.backend.configure_camera(device_id, params)
-
-    def capture_and_save_photo(
-        self,
-        device_id: str,
-        target_dir: Path,
-        target_filename: str
-    ) -> Optional[Path]:
-        """Captura foto no dispositivo e salva no diretório especificado."""
-        return self.backend.capture_and_save_photo(device_id, target_dir, target_filename)
-
-    def get_last_telemetry(self, device_id: str) -> Optional[Dict[str, Any]]:
-        """Retorna os metadados de telemetria da última foto (foco, ISO, exposição)."""
-        return self.backend.get_last_telemetry(device_id)
-
-    def close_cameras(self) -> None:
-        """Encerra a sessão com as câmeras."""
-        self.backend.close_cameras()

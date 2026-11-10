@@ -1,3 +1,4 @@
+import copy
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -10,7 +11,7 @@ try:
     AETHER_RDK_AVAILABLE = True
 except ImportError:
     AETHER_RDK_AVAILABLE = False
-    
+
     @dataclass
     class Pose:
         x: float = 0.0
@@ -143,78 +144,84 @@ class RobotConfig:
         )
 
 
+# Apenas as duas configurações de câmera utilizadas pelo Cam-App (HTTP / Camera2 HAL):
+# 1. "auto": Modo 3A + ISP + OIS/EIS ativados (emula comportamento automático no Cam-App)
+# 2. "manual_calibrado": Modo determinístico com 3A/ISP/OIS/EIS desligados e parâmetros
+#    (focus_distance, iso, exposure_time_ns) calibrados a partir do modo "auto" (ou fixados no config.yaml).
 DEFAULT_CAMERA_PRESETS: Dict[str, Dict[str, Any]] = {
-    "1_home_visao_geral": {
-        "focus_distance": 1.66,
-        "iso": 100,
-        "exposure_time_ns": 8333333,
-    },
-    "2_aproximacao_fina": {
-        "focus_distance": 5.0,
+    "auto": {
+        "control_mode": "auto",
+        "focus_distance": 0.0,
         "iso": 100,
         "exposure_time_ns": 10000000,
+        "ois_enabled": True,
+        "eis_enabled": True,
+        "auto_calibrate": False,
     },
-    "3_camera_em_movimento": {
-        "focus_distance": 2.5,
-        "iso": 400,
-        "exposure_time_ns": 2000000,
-    },
-    "4_baixa_luminosidade": {
-        "focus_distance": 2.5,
-        "iso": 800,
-        "exposure_time_ns": 16666666,
+    "manual_calibrado": {
+        "control_mode": "manual",
+        "focus_distance": 1.8621974,
+        "iso": 1141,
+        "exposure_time_ns": 16666660,
+        "ois_enabled": False,
+        "eis_enabled": False,
+        "auto_calibrate": True,
     },
 }
 
 
 @dataclass
 class SmartphoneConfig:
-    """Configuração dos smartphones Android para captura de imagens (IP Camera ou App Padrão ADB)."""
-    mode: str = "ip_camera"  # "ip_camera" (NanoHTTPD / Camera2 manual) ou "default_app" (ADB / device_manager)
-    # Modo ip_camera (HTTP)
-    ips: List[str] = field(default_factory=list)
+    """Configuração dos smartphones Android utilizando o aplicativo Cam-App (Camera2 HTTP Server)."""
+    ips: List[str] = field(default_factory=lambda: ["192.168.155.44"])
     port: int = 8080
-    presets: Dict[str, Dict[str, Any]] = field(default_factory=lambda: dict(DEFAULT_CAMERA_PRESETS))
-    default_preset: Optional[str] = "1_home_visao_geral"
-    stabilization_delay_sec: float = 0.5
+    presets: Dict[str, Dict[str, Any]] = field(
+        default_factory=lambda: copy.deepcopy(DEFAULT_CAMERA_PRESETS)
+    )
+    active_presets: List[str] = field(
+        default_factory=lambda: ["auto", "manual_calibrado"]
+    )
+    auto_calibrate_manual: bool = True
+    stabilization_delay_sec: float = 1.0  # Tempo de acomodação do VCM e ganhos do sensor após POST /config
     timeout_sec: float = 3.0
-    # Modo default_app (ADB)
-    serials: List[str] = field(default_factory=list)
-    capture_delay_sec: float = 2.0
-    # Mapeamento comum de identificadores para nomes legíveis de pasta
+    max_retries: int = 4
+    retry_backoff_sec: float = 0.5
     camera_names: Dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "SmartphoneConfig":
-        mode = data.get("mode")
-        ips = data.get("ips", [])
-        serials = data.get("serials", [])
-
-        # Inferir modo caso não tenha sido explicitado
-        if not mode:
-            if ips and not serials:
-                mode = "ip_camera"
-            elif serials and not ips:
-                mode = "default_app"
-            else:
-                mode = "ip_camera"
+        ips = data.get("ips", ["192.168.155.44"])
+        presets = copy.deepcopy(DEFAULT_CAMERA_PRESETS)
 
         user_presets = data.get("presets")
-        presets = dict(DEFAULT_CAMERA_PRESETS)
         if user_presets and isinstance(user_presets, dict):
-            presets.update(user_presets)
+            for key in ("auto", "manual_calibrado"):
+                if key in user_presets and isinstance(user_presets[key], dict):
+                    presets[key].update(user_presets[key])
+
+        active_presets = data.get("active_presets", ["auto", "manual_calibrado"])
+        if not isinstance(active_presets, list) or not active_presets:
+            active_presets = ["auto", "manual_calibrado"]
+
+        auto_calibrate_manual = bool(
+            data.get(
+                "auto_calibrate_manual",
+                presets.get("manual_calibrado", {}).get("auto_calibrate", True),
+            )
+        )
+        presets["manual_calibrado"]["auto_calibrate"] = auto_calibrate_manual
 
         return cls(
-            mode=mode,
             ips=ips,
             port=int(data.get("port", 8080)),
             presets=presets,
-            default_preset=data.get("default_preset", "1_home_visao_geral"),
-            stabilization_delay_sec=float(data.get("stabilization_delay_sec", 0.5)),
+            active_presets=active_presets,
+            auto_calibrate_manual=auto_calibrate_manual,
+            stabilization_delay_sec=float(data.get("stabilization_delay_sec", 1.0)),
             timeout_sec=float(data.get("timeout_sec", 3.0)),
-            serials=serials,
-            capture_delay_sec=float(data.get("capture_delay_sec", 2.0)),
-            camera_names=data.get("camera_names", {})
+            max_retries=int(data.get("max_retries", 4)),
+            retry_backoff_sec=float(data.get("retry_backoff_sec", 0.5)),
+            camera_names=data.get("camera_names", {}),
         )
 
 
@@ -268,17 +275,26 @@ class SceneConfig:
     name: str = "scene_01"
     description: str = "Cenário de teste 01"
     p0_pose: BasePose = field(default_factory=BasePose)
-    camera_preset: Optional[str] = None
+    camera_presets: List[str] = field(default_factory=lambda: ["auto", "manual_calibrado"])
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "SceneConfig":
         p0_data = data.get("p0_pose", {})
         p0_pose = BasePose.from_dict(p0_data) if p0_data else BasePose()
+
+        presets = data.get("camera_presets")
+        if not presets:
+            single_preset = data.get("camera_preset")
+            if single_preset:
+                presets = [single_preset]
+            else:
+                presets = ["auto", "manual_calibrado"]
+
         return cls(
             name=data.get("name", "scene_01"),
             description=data.get("description", ""),
             p0_pose=p0_pose,
-            camera_preset=data.get("camera_preset")
+            camera_presets=presets,
         )
 
 
@@ -313,7 +329,7 @@ class AppConfig:
             SceneConfig(name="scene_01", p0_pose=BasePose([300.0, 0.0, 400.0, 180.0, 0.0, 0.0, 0])),
             SceneConfig(name="scene_02", p0_pose=BasePose([350.0, 50.0, 420.0, 180.0, 0.0, 0.0, 0]))
         ]
-        
+
         return cls(
             dry_run=data.get("dry_run", False),
             robot=RobotConfig.from_dict(data.get("robot", {})),

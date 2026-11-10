@@ -1,18 +1,17 @@
 import json
-import time
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
 
 from ..config import AppConfig, Pose, Joint
 from ..robot.denso_controller import DensoRobotController
-from ..robot.trajectories import PoseVariationGenerator, PoseWaypoint
+from ..robot.trajectories import PoseVariationGenerator
 from ..smartphone.phone_controller import SmartphoneController
 from ..utils.logger import logger, console
 
 
 class DatasetCollector:
-    """Orquestrador da coleta de dataset sincronizando Robô DENSO VS-050 e Smartphones Android com objetos Pose/Joint."""
+    """Orquestrador da coleta de dataset sincronizando Robô DENSO VS-050 e Cam-App Android."""
 
     def __init__(self, config: AppConfig):
         self.config = config
@@ -22,12 +21,11 @@ class DatasetCollector:
         self.output_dir = Path(config.dataset.output_dir)
 
     def run(self) -> bool:
-        """Executa a rotina completa de coleta do dataset por Cenas e Variações de Poses."""
-        console.rule("[bold green]Iniciando Coleta do Dataset Visual Servoing (Pose/Joint aether_rdk)[/bold green]")
+        """Executa a rotina completa de coleta do dataset por Cenas, Variações de Poses e Configurações ('auto' e 'manual_calibrado')."""
+        console.rule("[bold green]Iniciando Coleta do Dataset Visual Servoing (DENSO VS-050 + Cam-App)[/bold green]")
         logger.info(f"Modo Dry-Run (Simulação): {'SIM' if self.config.dry_run else 'NÃO'}")
         logger.info(f"Diretório raiz de saída: {self.output_dir.resolve()}")
 
-        # Criar diretório base
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         # 1. Conectar Robô
@@ -36,77 +34,97 @@ class DatasetCollector:
             logger.error("Falha ao conectar com o robô DENSO. Abortando coleta.")
             return False
 
-        # 2. Conectar Smartphones
-        logger.info("--- [Passo 2/4] Conectando aos Smartphones Android ---")
+        # 2. Conectar Smartphones (Cam-App via HTTP)
+        logger.info("--- [Passo 2/4] Conectando aos Smartphones Android (Cam-App HTTP) ---")
         if not self.smartphone.connect():
-            logger.error("Falha ao conectar com os smartphones Android. Abortando coleta.")
+            logger.error("Falha ao conectar com o Cam-App nos smartphones. Abortando coleta.")
             self.robot.disconnect()
             return False
 
-        # 3. Preparar câmeras nos smartphones
         for device_id in self.smartphone.connected_devices:
             self.smartphone.prepare_camera(device_id)
 
-        # 4. Iterar sobre as Cenas
-        logger.info("--- [Passo 3/4] Executando Poses e Capturas de Cenas ---")
+        # 3. Iterar sobre as Cenas
+        logger.info("--- [Passo 3/4] Executando Poses, Calibração e Capturas de Cenas ---")
         metadata_scenes: Dict[str, Any] = {}
 
         try:
             for scene_idx, scene_cfg in enumerate(self.config.scenes, start=1):
                 logger.info(f"\n==================== CENA {scene_idx:02d}: {scene_cfg.name} ====================")
-                
-                # Se a cena tiver preset específico de câmera configurado, aplica
-                if scene_cfg.camera_preset:
-                    logger.info(f"Aplicando preset de câmera da cena: '{scene_cfg.camera_preset}'")
-                    self.smartphone.apply_preset(scene_cfg.camera_preset)
 
                 waypoints = self.trajectory_generator.generate_waypoints_for_base_pose(scene_cfg.p0_pose)
-                
                 p0_pose_obj: Pose = scene_cfg.p0_pose.to_pose()
+                presets_to_capture: List[str] = (
+                    scene_cfg.camera_presets
+                    if scene_cfg.camera_presets
+                    else self.config.smartphone.active_presets
+                )
+
+                # Posicionar robô em P0 para calibrar 'manual_calibrado' a partir do modo 'auto'
+                logger.info(f"Posicionando robô na pose de referência P0 da cena '{scene_cfg.name}' para calibração da câmera...")
+                if not self.robot.move_cartesian(p0_pose_obj):
+                    logger.error(f"Falha ao mover robô para P0 na cena {scene_cfg.name}. Pulando cena...")
+                    continue
+
+                calibrated_presets_by_device: Dict[str, Dict[str, Any]] = {}
+                if "manual_calibrado" in presets_to_capture:
+                    calibrated_raw = self.smartphone.calibrate_manual_from_auto()
+                    for dev_id, cal_cfg in calibrated_raw.items():
+                        cam_label = self.smartphone.device_names.get(dev_id, dev_id)
+                        calibrated_presets_by_device[cam_label] = cal_cfg
 
                 scene_metadata: Dict[str, Any] = {
                     "name": scene_cfg.name,
                     "description": scene_cfg.description,
-                    "camera_preset": scene_cfg.camera_preset,
+                    "camera_presets": presets_to_capture,
+                    "calibrated_manual_settings": calibrated_presets_by_device,
                     "p0_base_pose": p0_pose_obj.to_list(),
                     "waypoints": []
                 }
 
                 for wp_idx, wp in enumerate(waypoints, start=1):
                     logger.info(f"\n-> Waypoint {wp_idx}/{len(waypoints)} [{wp.id}] - Tipo: {wp.variation_type}")
-                    
-                    # Movimentar Robô com o objeto Pose
+
+                    # Movimentar Robô para o waypoint (no wp 1 já está em P0, mas garante posição exata)
                     move_success = self.robot.move_cartesian(wp.pose)
                     if not move_success:
                         logger.error(f"Falha ao mover robô para waypoint {wp.id}. Pulando...")
                         continue
 
-                    # Ler objetos Pose e Joint reais medidos pelo robô
+                    # Ler objetos Pose e Joint reais medidos pelo robô nesta posição estacionária
                     actual_pose: Pose = self.robot.get_cartesian_pose()
                     actual_joint: Joint = self.robot.get_joints_pose()
 
-                    captures_info: Dict[str, str] = {}
-                    camera_telemetry_info: Dict[str, Any] = {}
+                    captures_info: Dict[str, Dict[str, str]] = {}
+                    camera_telemetry_info: Dict[str, Dict[str, Any]] = {}
 
-                    # Capturar foto em cada smartphone/câmera conectada
+                    # Capturar nas duas configurações ('auto' e 'manual_calibrado') na mesma pose física do robô
                     for device_id in self.smartphone.connected_devices:
                         cam_folder_name = self.smartphone.device_names.get(device_id, device_id)
-                        target_cam_dir = self.output_dir / scene_cfg.name / cam_folder_name
-                        
-                        saved_path = self.smartphone.capture_and_save_photo(
-                            device_id=device_id,
-                            target_dir=target_cam_dir,
-                            target_filename=wp.filename
-                        )
+                        captures_info[cam_folder_name] = {}
+                        camera_telemetry_info[cam_folder_name] = {}
 
-                        if saved_path:
-                            rel_path = saved_path.relative_to(self.output_dir).as_posix()
-                            captures_info[cam_folder_name] = rel_path
-                            telemetry = self.smartphone.get_last_telemetry(device_id)
-                            if telemetry:
-                                camera_telemetry_info[cam_folder_name] = telemetry
+                        for preset_name in presets_to_capture:
+                            if self.smartphone.current_presets.get(device_id) != preset_name:
+                                self.smartphone.apply_preset(preset_name, device_id=device_id)
 
-                    # Registrar metadados do waypoint usando as listas dos objetos Pose e Joint
+                            target_cam_dir = self.output_dir / scene_cfg.name / cam_folder_name / preset_name
+                            saved_path = self.smartphone.capture_and_save_photo(
+                                device_id=device_id,
+                                target_dir=target_cam_dir,
+                                target_filename=wp.filename
+                            )
+
+                            if saved_path:
+                                rel_path = saved_path.relative_to(self.output_dir).as_posix()
+                                captures_info[cam_folder_name][preset_name] = rel_path
+                                telemetry = self.smartphone.get_last_telemetry(device_id)
+                                applied = self.smartphone.get_last_applied_settings(device_id)
+                                camera_telemetry_info[cam_folder_name][preset_name] = {
+                                    "applied_settings": applied,
+                                    "metadata": telemetry,
+                                }
+
                     wp_data = {
                         "waypoint_id": wp.id,
                         "filename": wp.filename,
@@ -123,16 +141,28 @@ class DatasetCollector:
 
                 metadata_scenes[scene_cfg.name] = scene_metadata
 
-            # 5. Salvar metadata.json unificado na raiz do dataset
+            # 4. Salvar metadata.json unificado na raiz do dataset
             logger.info("--- [Passo 4/4] Gerando metadata.json do Dataset ---")
+            device_presets_summary = {
+                self.smartphone.device_names.get(dev, dev): self.smartphone.get_device_presets(dev)
+                for dev in self.smartphone.connected_devices
+            }
+            device_status_summary = {
+                self.smartphone.device_names.get(dev, dev): self.smartphone.device_info.get(dev, {})
+                for dev in self.smartphone.connected_devices
+            }
+
             full_metadata = {
-                "dataset_version": "1.0",
+                "dataset_version": "2.0",
                 "generated_at": datetime.now().isoformat(),
                 "dry_run": self.config.dry_run,
                 "camera_info": {
-                    "mode": self.config.smartphone.mode,
+                    "app": "Cam-App (com.robotics.camera - Camera2 HTTP Server)",
+                    "active_presets": self.config.smartphone.active_presets,
+                    "auto_calibrate_manual": self.config.smartphone.auto_calibrate_manual,
                     "devices": self.smartphone.device_names,
-                    "presets": self.config.smartphone.presets if self.config.smartphone.mode == "ip_camera" else None
+                    "device_status": device_status_summary,
+                    "presets_by_device": device_presets_summary,
                 },
                 "robot_info": {
                     "model": "DENSO VS-050",
