@@ -99,7 +99,6 @@ class DensoRobotController:
 
         if self.dry_run:
             self._current_sim_pose = pose_obj
-            time.sleep(0.2)
             return True
 
         if not self.is_connected or not self.api:
@@ -125,7 +124,6 @@ class DensoRobotController:
 
         if self.dry_run:
             self._current_sim_joints = joint_obj
-            time.sleep(0.2)
             return True
 
         if not self.is_connected or not self.api:

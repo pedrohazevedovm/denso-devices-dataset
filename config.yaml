@@ -1,23 +1,28 @@
-# Configuração do Sistema de Coleta de Dataset Visual Servoing (DENSO VS-050 + Cam-App)
+# Configuração do Sistema de Coleta de Dataset Visual Servoing
+# Fase 0: Calibração '2 em 1' (Intrínsecos + Hand-Eye via ChArUco em 24 poses)
+# Fases 1..3: Perturbações Locais em SE(3) (P0..P7) + Latin Hypercube Sampling (LHS)
 
-dry_run: false  # Defina como false quando estiver conectado ao robô e smartphone reais
+dry_run: false  # Defina como false quando estiver conectado ao robô DENSO e smartphone reais
 
 robot:
   ip_address: "192.168.160.227"
   workspace_name: "VS_WORKSPACE"
   control_name: "DENSO_VS050"
-  speed: 20.0                  # Velocidade do braço (0 a 100%)
-  accel: 20.0                  # Aceleração (0 a 100%)
-  decel: 20.0                  # Desaceleração (0 a 100%)
-  stabilization_delay_sec: 1.5 # Tempo de amortecimento/espera mecânica antes da foto
+  speed: 20.0                    # Velocidade do braço (0 a 100%)
+  accel: 20.0                    # Aceleração (0 a 100%)
+  decel: 20.0                    # Desaceleração (0 a 100%)
+  robot_settling_time_sec: 1.5   # Tempo de estabilização mecânica após posicionamento antes da foto
+  euler_convention: "xyz"        # Convenção nativa DENSO RC8: 'xyz' extrínseco (equivalente a 'ZYX' intrínseco)
+  mount_id: "MOUNT_FLANGE_V1"    # Identificador físico do suporte acoplado ao flange
+  tool_definition_id: "SMARTPHONE_TOOL_V1"
 
-  tcp_offset:                  # Deslocamento do Tool Center Point (TCP) da ferramenta/suporte
-    x: 0.0                     # em mm
-    y: 0.0                     # em mm
-    z: 0.0                     # em mm
-    rx: 0.0                    # em graus
-    ry: 0.0                    # em graus
-    rz: 0.0                    # em graus
+  tcp_offset:                    # Transformação aproximada ^F T_T (Flange para Tool Center Point / Câmera)
+    x: 0.0                       # em mm
+    y: 0.0                       # em mm
+    z: 0.0                       # em mm
+    rx: 0.0                      # em graus
+    ry: 0.0                      # em graus
+    rz: 0.0                      # em graus
     tag: "SMARTPHONE_TOOL"
 
 smartphone:
@@ -25,19 +30,22 @@ smartphone:
   ips:
     - "192.168.155.44"
   port: 8080
-  stabilization_delay_sec: 1.0 # Tempo de acomodação física da lente (VCM) e ganhos do sensor após POST /config
+  smartphone_id: "moto_razr_60_ultra"
+  camera_physical_id: "0"        # ID da câmera física traseira principal no Camera2 HAL
+  auto_3a_settle_sec: 1.0        # Tempo de acomodação de 3A (AF/AE/AWB) após ativar modo 'auto'
+  manual_settle_sec: 1.0         # Tempo de estabilização da lente (VCM) e sensor após ativar 'manual_calibrado'
+  stabilization_delay_sec: 1.0
   timeout_sec: 3.0
   max_retries: 4
   retry_backoff_sec: 0.5
 
-  # Apenas duas configurações são utilizadas: "auto" e "manual_calibrado"
+  # Apenas duas configurações de câmera são utilizadas: "auto" e "manual_calibrado"
   active_presets:
     - "auto"
     - "manual_calibrado"
 
-  # Quando true, na pose inicial P0 o sistema coloca a câmera em "auto", captura 1 frame
-  # para ler lens_focus_distance, sensor_sensitivity (ISO) e sensor_exposure_time do X-Camera-Metadata
-  # e aplica automaticamente esses valores em "manual_calibrado".
+  # Na pose inicial P0, dispara 1 captura em modo 'auto', extrai lens_focus_distance,
+  # sensor_sensitivity (ISO) e sensor_exposure_time de X-Camera-Metadata e trava em 'manual_calibrado'.
   auto_calibrate_manual: true
 
   presets:
@@ -50,6 +58,8 @@ smartphone:
       eis_enabled: true
 
     "manual_calibrado":
+      # Exposição, sensibilidade, foco e balanço de branco fixos, com controles de
+      # pós-processamento e estabilização desativáveis configurados para OFF.
       control_mode: "manual"
       auto_calibrate: true       # Se false, usa os valores fixos abaixo sem sobrescrever pelo modo auto
       focus_distance: 1.8621974  # Dioptrias (1 / distância_em_metros)
@@ -58,26 +68,63 @@ smartphone:
       ois_enabled: false
       eis_enabled: false
 
-  # Mapeamento de IPs para o nome da pasta da câmera
   camera_names:
     "192.168.155.44": "cam_01_moto_razr_60_ultra"
     "192.168.158.48": "cam_01_moto_edge_40"
 
-variations:
-  delta_trans_xy:              # Variação P1 (Translação XY)
-    dx: 20.0                   # mm
-    dy: 15.0                   # mm
-  delta_rot_z: 15.0            # Variação P2 (Rotação Rz / J6 em graus)
-  delta_scale_z: -30.0         # Variação P3 (Profundidade Z em mm)
-  delta_combined:              # Variação P4 (Combinada)
-    dx: 15.0                   # mm
-    dy: 10.0                   # mm
-    dz: -20.0                  # mm
-    drz: 10.0                  # graus
+# Fase 0: Calibração Automatizada "2 em 1" (Intrínsecos K, D + Hand-Eye AX = XB via ChArUco)
+calibration:
+  calibration_id: "calib_phone01_mount01_20261110"
+  calibration_file: null         # Caminho opcional para calibration_profile.json pré-existente
+  output_dir: "assets/dataset/calibrations"
+  rectify_on_collect: true       # Salva automaticamente o par retificado em rectified/ durante --collect
+  p_cal_0_pose:
+    cartesian: [440.0, 60.0, 585.0, 16.0, -22.0, 150.0, 1]
+  d0_mm: 350.0                   # Distância aproximada da câmera ao centro do tabuleiro ChArUco em P_cal,0
+  inner_tilt_deg: 15.0           # Bloco 1 (Anel Interno): inclinação em graus
+  outer_tilt_deg: 22.0           # Bloco 2 (Anel Externo): inclinação em graus
+  outer_rolls_deg: [20.0, -20.0, 35.0, -35.0]
+  outer_radii_factors: [0.85, 1.15]
+  edge_tilt_deg: 8.0             # Bloco 3 (Varredura de Bordas/Cantos): inclinação leve em graus
+  edge_offset_fraction: 0.12     # Deslocamento lateral proporcional a d0_mm
+  edge_radius_factor: 0.90
+  calibration_settling_time_sec: 1.2
+  min_charuco_corners: 8
+  hand_eye_method: "PARK"        # Opções: "PARK", "TSAI", "DANIILIDIS"
+  num_distortion_coeffs: 5       # Modelo opencv_plumb_bob_5 (k1, k2, p1, p2, k3)
+  use_camera2_initial_guess: false
+  charuco_spec:
+    squares_x: 7
+    squares_y: 5
+    square_length_m: 0.030
+    marker_length_m: 0.022
+    dictionary: "DICT_4X4_50"
+
+# Parâmetros de Geração das Famílias de Poses P0..P7 em SE(3) (Referencial Local T_0)
+sampling:
+  # Vetores de limites inferiores l = [x_min, y_min, z_min, rx_min, ry_min, rz_min] (mm e graus)
+  lower_bounds: [-30.0, -25.0, -40.0, -10.0, -10.0, -15.0]
+  # Vetores de limites superiores u = [x_max, y_max, z_max, rx_max, ry_max, rz_max] (mm e graus)
+  upper_bounds: [30.0, 25.0, 40.0, 10.0, 10.0, 15.0]
+
+  # Frações determinísticas dos limites [l, u] para cada eixo isolado em P1..P6
+  isolated_fractions: [-1.0, -0.75, -0.50, -0.25, 0.25, 0.50, 0.75, 1.0]
+
+  # Parâmetros do Latin Hypercube Sampling (LHS) 6-DoF para a família P7
+  lhs_samples: 30
+  lhs_shrinkage_factor: 0.75     # Fator de redução sobre [l, u] para evitar perda de FOV na combinação 6-DoF
+  lhs_seed: 42
+  lhs_optimization: "random-cd"
+
+  # Captura obrigatória de P0 no início e no final do bloco para verificação de deriva
+  capture_p0_start: true
+  capture_p0_end: true
+  repeat_count: 1
 
 scenes:
   - name: "scene_01"
-    description: "Enquadramento do Cenário 01 - Visão Geral"
+    scene_category: "planar_core"
+    description: "Enquadramento do Cenário 01 - Alvo Planar Principal"
     camera_presets:
       - "auto"
       - "manual_calibrado"
@@ -85,7 +132,8 @@ scenes:
       cartesian: [440.0, 60.0, 585.0, 16.0, -22.0, 150.0, 1]
 
   - name: "scene_02"
-    description: "Enquadramento do Cenário 02 - Aproximação Fina"
+    scene_category: "model_violation"
+    description: "Enquadramento do Cenário 02 - Alvo 3D / Violação de Planaridade"
     camera_presets:
       - "auto"
       - "manual_calibrado"
@@ -94,4 +142,10 @@ scenes:
 
 dataset:
   output_dir: "assets/dataset"
+  session_id: "session_001"
+  dataset_version: "2.0.0"
+  schema_version: "2.0.0"
+  session_plan_file: "session_plan.json"
+  poses_plan_file: "poses_plan.json"
   save_raw_photos: true
+  save_tabular_csv: true

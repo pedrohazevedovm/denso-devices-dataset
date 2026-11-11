@@ -166,8 +166,9 @@ class SmartphoneController:
 
     Opera exclusivamente com duas configurações de câmera no Cam-App:
       - 'auto': Modo 3A (AF, AE, AWB) + filtros ISP + OIS/EIS ativados.
-      - 'manual_calibrado': Modo manual estrito (3A, ISP, OIS e EIS desligados) com
-        foco, ISO e tempo de exposição calibrados a partir do modo 'auto' (ou fixados no config.yaml).
+      - 'manual_calibrado': Exposição, sensibilidade, foco e balanço de branco fixos,
+        com controles de pós-processamento e estabilização desativáveis configurados para OFF,
+        calibrados a partir do modo 'auto' (ou fixados no config.yaml).
     """
 
     def __init__(self, config: SmartphoneConfig, dry_run: bool = False):
@@ -384,7 +385,6 @@ class SmartphoneController:
                 self.current_presets[dev] = preset_name
                 self.last_applied_settings[dev] = dict(payload)
                 self.last_telemetry[dev] = _build_simulated_metadata(payload, preset_name)
-                time.sleep(0.05)
                 continue
 
             if self._post_config_with_retry(dev, payload):
@@ -396,11 +396,16 @@ class SmartphoneController:
             else:
                 success = False
 
-        if not self.dry_run and self.config.stabilization_delay_sec > 0:
+        settle_sec = (
+            self.config.auto_3a_settle_sec
+            if preset_name == "auto"
+            else self.config.manual_settle_sec
+        )
+        if not self.dry_run and settle_sec > 0:
             logger.info(
-                f"Aguardando {self.config.stabilization_delay_sec:.2f}s para acomodação física da lente (VCM) e sensor..."
+                f"Aguardando {settle_sec:.2f}s para acomodação ({preset_name}) da lente (VCM) / sensor..."
             )
-            time.sleep(self.config.stabilization_delay_sec)
+            time.sleep(settle_sec)
 
         return success
 
@@ -511,7 +516,6 @@ class SmartphoneController:
                 f"Exp: {sim_meta['exposure_time_ms']}ms"
             )
             _create_simulated_image(final_path, device_label, target_filename, extra_text=extra)
-            time.sleep(0.05)
             return final_path
 
         frame, raw_jpeg_bytes, metadata = self._capture_raw(device_id)

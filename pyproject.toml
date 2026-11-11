@@ -1,7 +1,7 @@
 [project]
 name = "visual-servoing-dataset"
-version = "0.2.0"
-description = "Coletor de Dataset para Visual Servoing com Robô DENSO VS-050 e Cam-App Android"
+version = "0.3.0"
+description = "Coletor de Dataset para Visual Servoing com Robô DENSO VS-050 e Cam-App Android (Protocolo Experimental em 3 Fases SE(3) + LHS)"
 authors = [
     {name = "Pedro H Azevedo", email = "phavm@softex.cin.ufpe.br"}
 ]
@@ -13,12 +13,19 @@ dependencies = [
     "pyyaml (>=6.0.3,<7.0.0)",
     "requests (>=2.31.0)",
     "numpy (>=1.24.0)",
+    "scipy (>=1.11.0)",
     "opencv-python (>=4.8.0)",
     "pillow (>=10.0.0)",
-    "rich (>=13.0.0)"
+    "rich (>=13.0.0)",
+    "pytest (>=8.0.0)"
 ]
 
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
