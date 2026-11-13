@@ -5,12 +5,12 @@
 dry_run: false  # Defina como false quando estiver conectado ao robô DENSO e smartphone reais
 
 robot:
-  ip_address: "192.168.160.227"
+  ip_address: "192.168.160.225"
   workspace_name: "VS_WORKSPACE"
   control_name: "DENSO_VS050"
   speed: 20.0                    # Velocidade do braço (0 a 100%)
-  accel: 20.0                    # Aceleração (0 a 100%)
-  decel: 20.0                    # Desaceleração (0 a 100%)
+  accel: 10.0                    # Aceleração (0 a 100%)
+  decel: 10.0                    # Desaceleração (0 a 100%)
   robot_settling_time_sec: 1.5   # Tempo de estabilização mecânica após posicionamento antes da foto
   euler_convention: "xyz"        # Convenção nativa DENSO RC8: 'xyz' extrínseco (equivalente a 'ZYX' intrínseco)
   mount_id: "MOUNT_FLANGE_V1"    # Identificador físico do suporte acoplado ao flange
@@ -28,9 +28,9 @@ robot:
 smartphone:
   # Endereço(s) IP do aplicativo Cam-App (HTTP / NanoHTTPD na porta 8080)
   ips:
-    - "192.168.155.44"
+    - "192.168.158.65"
   port: 8080
-  smartphone_id: "moto_razr_60_ultra"
+  smartphone_id: "moto_g_2025"
   camera_physical_id: "0"        # ID da câmera física traseira principal no Camera2 HAL
   auto_3a_settle_sec: 1.0        # Tempo de acomodação de 3A (AF/AE/AWB) após ativar modo 'auto'
   manual_settle_sec: 1.0         # Tempo de estabilização da lente (VCM) e sensor após ativar 'manual_calibrado'
@@ -71,31 +71,32 @@ smartphone:
   camera_names:
     "192.168.155.44": "cam_01_moto_razr_60_ultra"
     "192.168.158.48": "cam_01_moto_edge_40"
+    "192.168.158.65": "cam_01_moto_g_2025"
 
 # Fase 0: Calibração Automatizada "2 em 1" (Intrínsecos K, D + Hand-Eye AX = XB via ChArUco)
 calibration:
-  calibration_id: "calib_phone01_mount01_20261110"
+  calibration_id: "calib_motog2025_mount01_20261113"
   calibration_file: null         # Caminho opcional para calibration_profile.json pré-existente
   output_dir: "assets/dataset/calibrations"
   rectify_on_collect: true       # Salva automaticamente o par retificado em rectified/ durante --collect
   p_cal_0_pose:
-    cartesian: [440.0, 60.0, 585.0, 16.0, -22.0, 150.0, 1]
-  d0_mm: 350.0                   # Distância aproximada da câmera ao centro do tabuleiro ChArUco em P_cal,0
-  inner_tilt_deg: 15.0           # Bloco 1 (Anel Interno): inclinação em graus
-  outer_tilt_deg: 22.0           # Bloco 2 (Anel Externo): inclinação em graus
-  outer_rolls_deg: [20.0, -20.0, 35.0, -35.0]
-  outer_radii_factors: [0.85, 1.15]
-  edge_tilt_deg: 8.0             # Bloco 3 (Varredura de Bordas/Cantos): inclinação leve em graus
-  edge_offset_fraction: 0.12     # Deslocamento lateral proporcional a d0_mm
-  edge_radius_factor: 0.90
+    cartesian: [218.5384860004977, -316.54057342664845, 552.2213783559552, -45.53891513533287, 87.49057104997314, -134.5534765817044, 5]
+  d0_mm: 240.0                   # Distância aproximada da câmera ao centro do tabuleiro ChArUco em P_cal,0 (~210-280 mm medidos)
+  inner_tilt_deg: 10.0           # Bloco 1 (Anel Interno): inclinação em graus
+  outer_tilt_deg: 14.0           # Bloco 2 (Anel Externo): inclinação em graus
+  outer_rolls_deg: [15.0, -15.0, 25.0, -25.0]
+  outer_radii_factors: [0.92, 1.08]
+  edge_tilt_deg: 6.0             # Bloco 3 (Varredura de Bordas/Cantos): inclinação leve em graus
+  edge_offset_fraction: 0.08     # Deslocamento lateral proporcional a d0_mm
+  edge_radius_factor: 0.95
   calibration_settling_time_sec: 1.2
   min_charuco_corners: 8
   hand_eye_method: "PARK"        # Opções: "PARK", "TSAI", "DANIILIDIS"
   num_distortion_coeffs: 5       # Modelo opencv_plumb_bob_5 (k1, k2, p1, p2, k3)
   use_camera2_initial_guess: false
   charuco_spec:
-    squares_x: 7
-    squares_y: 5
+    squares_x: 5
+    squares_y: 7
     square_length_m: 0.030
     marker_length_m: 0.022
     dictionary: "DICT_4X4_50"

@@ -119,23 +119,13 @@ class CalibrationManager:
             dome_poses, t_b_pivot = self.dome_generator.generate_dome_poses(measured_p0)
             logger.info(f"Geradas {len(dome_poses)} poses na Abóbada Esférica (3 blocos de 8 poses).")
 
-            if verify_poses and not self.config.dry_run:
-                for dp in dome_poses:
-                    ans = console.input(
-                        f"[Verificação] Mover para {dp.pose_id} (Bloco {dp.block_id}: "
-                        f"alpha={dp.alpha_pitch_deg}, beta={dp.beta_yaw_deg}, gamma={dp.gamma_roll_deg}, r={dp.radius_d_mm}mm)? "
-                        f"[Enter=Sim / s=Pular inspeção]: "
-                    ).strip().lower()
-                    if ans == "s":
-                        break
-                    robot.move_cartesian(dp.target_cartesian_pose)
-
             # ------------------------------------------------------------------
             # Passo 4: Coleta das 24 poses estritamente em 'manual_calibrado'
             # ------------------------------------------------------------------
             detections: List[CharucoFrameDetection] = []
             pose_records: List[Dict[str, Any]] = []
             resolution_px = (1920, 1080)
+            interactive_verify = bool(verify_poses and not self.config.dry_run)
 
             # Ground truth sintético para validação matemática em modo --dry-run
             rng = np.random.default_rng(42)
@@ -160,12 +150,41 @@ class CalibrationManager:
             t_base_to_board_sim_gt = t_b_pivot @ board_center_shift
 
             for dp in dome_poses:
+                if interactive_verify:
+                    ans = console.input(
+                        f"[Verificação] Mover e capturar {dp.pose_id} (Bloco {dp.block_id}: "
+                        f"alpha={dp.alpha_pitch_deg}, beta={dp.beta_yaw_deg}, gamma={dp.gamma_roll_deg}, r={dp.radius_d_mm}mm)? "
+                        f"[Enter=Sim / p=Pular esta pose / s=Seguir automático nas demais]: "
+                    ).strip().lower()
+                    if ans == "s":
+                        interactive_verify = False
+                    elif ans == "p":
+                        logger.info(f"Pose {dp.pose_id} pulada manualmente pelo operador.")
+                        continue
+
                 logger.info(
                     f"-> [{dp.pose_index:02d}/24] {dp.pose_id} ({dp.block_name}) | "
                     f"Tilt=({dp.alpha_pitch_deg:+.1f}°, {dp.beta_yaw_deg:+.1f}°, {dp.gamma_roll_deg:+.1f}°) | "
                     f"Shift=({dp.dx_mm:+.1f}, {dp.dy_mm:+.1f}) mm | d={dp.radius_d_mm:.1f} mm"
                 )
-                robot.move_cartesian(dp.target_cartesian_pose)
+                moved = robot.move_cartesian(dp.target_cartesian_pose)
+                if not moved:
+                    logger.warning(
+                        f"Não foi possível alcançar {dp.pose_id} (fora de alcance ou erro do controlador). "
+                        f"Pulando captura desta pose para evitar foto duplicada."
+                    )
+                    pose_records.append({
+                        **dp.to_dict(),
+                        "pose_measured_before": None,
+                        "pose_measured_after": None,
+                        "inter_capture_drift_mm": None,
+                        "inter_capture_drift_deg": None,
+                        "charuco_valid": False,
+                        "charuco_corners_count": 0,
+                        "rejection_reason": "robot_out_of_range",
+                    })
+                    continue
+
                 if not self.config.dry_run and self.cal_cfg.calibration_settling_time_sec > 0:
                     time.sleep(self.cal_cfg.calibration_settling_time_sec)
 
@@ -209,6 +228,17 @@ class CalibrationManager:
                         t_base_to_tcp_mm=t_b_tk,
                         debug_save_path=debug_path,
                     )
+                    self.charuco_spec = self.solver.charuco_spec
+                    if det.valid:
+                        logger.info(
+                            f"[ChArUco OK] {dp.pose_id}: {det.corners_count} cantos internos detectados "
+                            f"(debug salvo em {debug_path.name})."
+                        )
+                    else:
+                        logger.warning(
+                            f"[ChArUco Rejeitado] {dp.pose_id}: {det.corners_count} cantos detectados "
+                            f"({det.rejection_reason})."
+                        )
 
                 pose_after = robot.get_cartesian_pose()
                 drift_mm, drift_deg = compute_pose_error(

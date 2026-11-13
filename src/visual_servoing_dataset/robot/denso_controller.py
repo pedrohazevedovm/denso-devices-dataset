@@ -89,6 +89,34 @@ class DensoRobotController:
             logger.warning(f"Não foi possível registrar TCP customizado '{tcp.tag}': {e}")
             return False
 
+    def is_out_of_range(self, pose: Union[Pose, List[float], Dict[str, float]]) -> bool:
+        """Verifica preventivamente no controlador RC8 se a Pose está fora do alcance cinemático (sem desligar o motor)."""
+        if self.dry_run or not self.is_connected or not self.api:
+            return False
+        pose_obj: Pose = ensure_pose(pose)
+        try:
+            res = self.api.is_out_of_range(pose_obj)
+            return bool(res)
+        except Exception as e:
+            logger.warning(f"Não foi possível consultar is_out_of_range no RC8: {e}")
+            return False
+
+    def recover_from_error(self) -> bool:
+        """Limpa erros pendentes no controlador RC8 e reabilita os motores caso tenham sido desligados."""
+        if self.dry_run or not self.is_connected or not self.api:
+            return True
+        try:
+            logger.info("Limpando estado de erro no controlador RC8 e reabilitando motores (Motor ON)...")
+            self.api.errors_cleanup()
+            time.sleep(0.3)
+            if not self.api.motor_enabled():
+                self.api.motor_on()
+                logger.info("Motores do robô reabilitados com sucesso após erro.")
+            return True
+        except Exception as e:
+            logger.warning(f"Falha ao tentar recuperar controlador RC8 após erro: {e}")
+            return False
+
     def move_cartesian(self, pose: Union[Pose, List[float], Dict[str, float]]) -> bool:
         """Move o braço para a pose cartesiana desejada representada pelo objeto Pose."""
         pose_obj: Pose = ensure_pose(pose)
@@ -105,13 +133,25 @@ class DensoRobotController:
             logger.error("Erro: Robô DENSO não está conectado.")
             return False
 
+        # Verificação preventiva de alcance no RC8 para evitar desligamento de motor (0x83201501)
+        if self.is_out_of_range(pose_obj):
+            logger.warning(
+                f"Pose fora do alcance cinemático (OutRange) detectada preventivamente pelo RC8: "
+                f"X={pose_obj.x:.2f}, Y={pose_obj.y:.2f}, Z={pose_obj.z:.2f}. "
+                f"Movimento ignorado para manter Motor ON."
+            )
+            return False
+
         try:
+            if not self.api.motor_enabled():
+                self.api.motor_on()
             success = self.api.move_cartesian(pose_obj)
             if self.config.stabilization_delay_sec > 0:
                 time.sleep(self.config.stabilization_delay_sec)
             return success
         except Exception as e:
             logger.error(f"Erro na movimentação cartesiana com objeto Pose: {e}")
+            self.recover_from_error()
             return False
 
     def move_joints(self, joints: Union[Joint, List[float], Dict[str, float]]) -> bool:

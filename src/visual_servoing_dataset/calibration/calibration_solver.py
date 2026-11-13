@@ -102,9 +102,9 @@ class CharucoCalibrationSolver:
         self.num_distortion_coeffs = int(num_distortion_coeffs)
 
         self.aruco_dict, self.board = build_charuco_board(charuco_spec)
-        detector_params = cv2.aruco.DetectorParameters()
-        detector_params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
-        self.detector = cv2.aruco.CharucoDetector(self.board, detectorParams=detector_params)
+        self._detector_params = cv2.aruco.DetectorParameters()
+        self._detector_params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+        self.detector = cv2.aruco.CharucoDetector(self.board, detectorParams=self._detector_params)
 
         # Coordenadas 3D dos cantos internos do tabuleiro ChArUco em milímetros (Z = 0)
         self.board_corners_3d_mm: np.ndarray = (
@@ -122,8 +122,50 @@ class CharucoCalibrationSolver:
         gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY) if image_bgr.ndim == 3 else image_bgr
         charuco_corners, charuco_ids, marker_corners, marker_ids = self.detector.detectBoard(gray)
 
+        # Fallback inteligente: se o tabuleiro impresso tiver orientação transposta (ex: 5x7 em vez de 7x5)
+        count_primary = 0 if charuco_ids is None else int(len(charuco_ids))
+        if count_primary < self.min_charuco_corners and self.charuco_spec.squares_x != self.charuco_spec.squares_y:
+            transposed_spec = CharucoBoardSpec(
+                squares_x=self.charuco_spec.squares_y,
+                squares_y=self.charuco_spec.squares_x,
+                square_length_m=self.charuco_spec.square_length_m,
+                marker_length_m=self.charuco_spec.marker_length_m,
+                dictionary=self.charuco_spec.dictionary,
+            )
+            _, t_board = build_charuco_board(transposed_spec)
+            t_detector = cv2.aruco.CharucoDetector(t_board, detectorParams=self._detector_params)
+            t_corners, t_ids, t_mcorners, t_mids = t_detector.detectBoard(gray)
+            count_transposed = 0 if t_ids is None else int(len(t_ids))
+            if count_transposed >= self.min_charuco_corners and count_transposed > count_primary:
+                logger.info(
+                    f"Auto-detectada orientação transposta do tabuleiro ChArUco impresso: "
+                    f"({transposed_spec.squares_x}x{transposed_spec.squares_y}) em vez de "
+                    f"({self.charuco_spec.squares_x}x{self.charuco_spec.squares_y}) "
+                    f"({count_transposed} cantos detectados em {pose_id})."
+                )
+                self.charuco_spec = transposed_spec
+                self.board = t_board
+                self.detector = t_detector
+                self.board_corners_3d_mm = (
+                    np.asarray(self.board.getChessboardCorners(), dtype=np.float64) * 1000.0
+                )
+                charuco_corners, charuco_ids, marker_corners, marker_ids = (
+                    t_corners,
+                    t_ids,
+                    t_mcorners,
+                    t_mids,
+                )
+
         if charuco_corners is None or charuco_ids is None or len(charuco_ids) < self.min_charuco_corners:
             count = 0 if charuco_ids is None else int(len(charuco_ids))
+            if debug_save_path is not None:
+                debug_img = image_bgr.copy() if image_bgr.ndim == 3 else cv2.cvtColor(image_bgr, cv2.COLOR_GRAY2BGR)
+                if marker_corners is not None and len(marker_corners) > 0:
+                    cv2.aruco.drawDetectedMarkers(debug_img, marker_corners, marker_ids)
+                if charuco_corners is not None and charuco_ids is not None and len(charuco_ids) > 0:
+                    cv2.aruco.drawDetectedCornersCharuco(debug_img, charuco_corners, charuco_ids, (0, 165, 255))
+                debug_save_path.parent.mkdir(parents=True, exist_ok=True)
+                cv2.imwrite(str(debug_save_path), debug_img)
             return CharucoFrameDetection(
                 pose_id=pose_id,
                 valid=False,
