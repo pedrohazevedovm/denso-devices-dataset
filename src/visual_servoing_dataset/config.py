@@ -409,6 +409,16 @@ class CalibrationConfig:
     charuco_square_length_m: float = 0.030
     charuco_marker_length_m: float = 0.022
     charuco_dictionary: str = "DICT_4X4_50"
+    auto_center_p0: bool = True
+    center_marker_id: int = 8
+    center_max_iterations: int = 5
+    center_tolerance_px: float = 12.0
+    parallelism_tolerance_pct: float = 1.5
+    center_kp_translation: float = 0.75
+    center_kp_rotation: float = 0.70
+    center_align_roll: bool = True
+    center_max_step_mm: float = 35.0
+    center_max_step_deg: float = 5.0
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "CalibrationConfig":
@@ -439,6 +449,16 @@ class CalibrationConfig:
             charuco_square_length_m=float(charuco_data.get("square_length_m", data.get("charuco_square_length_m", 0.030))),
             charuco_marker_length_m=float(charuco_data.get("marker_length_m", data.get("charuco_marker_length_m", 0.022))),
             charuco_dictionary=str(charuco_data.get("dictionary", data.get("charuco_dictionary", "DICT_4X4_50"))),
+            auto_center_p0=bool(data.get("auto_center_p0", True)),
+            center_marker_id=int(data.get("center_marker_id", 8)),
+            center_max_iterations=int(data.get("center_max_iterations", 5)),
+            center_tolerance_px=float(data.get("center_tolerance_px", 12.0)),
+            parallelism_tolerance_pct=float(data.get("parallelism_tolerance_pct", 1.5)),
+            center_kp_translation=float(data.get("center_kp_translation", 0.75)),
+            center_kp_rotation=float(data.get("center_kp_rotation", 0.70)),
+            center_align_roll=bool(data.get("center_align_roll", True)),
+            center_max_step_mm=float(data.get("center_max_step_mm", 35.0)),
+            center_max_step_deg=float(data.get("center_max_step_deg", 5.0)),
         )
 
 

@@ -304,3 +304,56 @@ def test_dry_run_charuco_and_calibration_integration_with_collect(tmp_path: Path
     rect_rel = cam_modes["manual_calibrado"]["rectified_relative_path"]
     assert rect_rel is not None
     assert (out_dir / rect_rel).exists()
+
+
+def test_auto_center_charuco_convergence_id8_and_perimeters(tmp_path: Path):
+    """
+    Teste 5: Verifica a convergência da rotina automática de centralização (via ArUco ID=8)
+    e alinhamento de paralelismo pelos perímetros das extremidades (15,16 vs 0,1 e Topo vs Base)
+    a partir de uma pose inicial desalinhada e deslocada.
+    """
+    cal_dir = tmp_path / "calibrations_center"
+    cfg = AppConfig(
+        dry_run=True,
+        calibration=CalibrationConfig(
+            calibration_id="calib_center_test",
+            output_dir=str(cal_dir),
+            d0_mm=240.0,
+            charuco_squares_x=5,
+            charuco_squares_y=7,
+            center_marker_id=8,
+            center_max_iterations=6,
+            center_tolerance_px=12.0,
+            parallelism_tolerance_pct=1.5,
+            center_kp_translation=0.80,
+            center_kp_rotation=0.75,
+        ),
+    )
+
+    # Perturbação inicial no suporte (ex: celular recolocado com offset de +18mm, -15mm e inclinado +7°, -5°, +4°)
+    t_pert = np.eye(4, dtype=np.float64)
+    t_pert[:3, 3] = [18.0, -15.0, 0.0]
+    t_piv = np.eye(4, dtype=np.float64)
+    t_piv[2, 3] = 240.0
+    t_unpiv = np.eye(4, dtype=np.float64)
+    t_unpiv[2, 3] = -240.0
+    t_rot = np.eye(4, dtype=np.float64)
+    t_rot[:3, :3] = Rotation.from_euler("xyz", [7.0, -5.0, 4.0], degrees=True).as_matrix()
+    initial_perturbation = t_pert @ t_piv @ t_rot @ t_unpiv
+
+    cal_mgr = CalibrationManager(cfg)
+    _, history = cal_mgr.auto_center_charuco(initial_perturbation_se3=initial_perturbation)
+
+    assert len(history) >= 2
+    first_meas = history[0]["measurement"]
+    last_meas = history[-1]["measurement"]
+
+    # Na iteração 1 o tabuleiro está fora do centro (> 80 px) e inclinado (> 6% de assimetria de perímetros)
+    assert first_meas["center_error_norm_px"] > 80.0
+    assert abs(first_meas["horiz_asymmetry_pct"]) > 6.0
+
+    # Na última iteração o controlador converge para o centro (<= 12 px) e paralelismo (<= 1.5%)
+    assert last_meas["center_error_norm_px"] <= 12.0
+    assert abs(last_meas["horiz_asymmetry_pct"]) <= 1.5
+    assert abs(last_meas["vert_asymmetry_pct"]) <= 1.5
+    assert history[-1]["converged"] is True

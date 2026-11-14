@@ -76,7 +76,7 @@ smartphone:
 # Fase 0: Calibração Automatizada "2 em 1" (Intrínsecos K, D + Hand-Eye AX = XB via ChArUco)
 calibration:
   calibration_id: "calib_motog2025_mount01_20261113"
-  calibration_file: null         # Caminho opcional para calibration_profile.json pré-existente
+  calibration_file: "assets/dataset/calibrations/calib_motog2025_mount01_20261113/calibration_profile.json"
   output_dir: "assets/dataset/calibrations"
   rectify_on_collect: true       # Salva automaticamente o par retificado em rectified/ durante --collect
   p_cal_0_pose:
@@ -100,6 +100,17 @@ calibration:
     square_length_m: 0.030
     marker_length_m: 0.022
     dictionary: "DICT_4X4_50"
+  # Centralização automática do ChArUco (via ArUco ID=8) e paralelismo por perímetros (15,16 vs 0,1)
+  auto_center_p0: true
+  center_marker_id: 8
+  center_max_iterations: 5
+  center_tolerance_px: 12.0
+  parallelism_tolerance_pct: 1.5
+  center_kp_translation: 0.75
+  center_kp_rotation: 0.70
+  center_align_roll: true
+  center_max_step_mm: 35.0
+  center_max_step_deg: 5.0
 
 # Parâmetros de Geração das Famílias de Poses P0..P7 em SE(3) (Referencial Local T_0)
 sampling:

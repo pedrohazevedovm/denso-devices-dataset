@@ -41,6 +41,68 @@ class CharucoFrameDetection:
 
 
 @dataclass
+class CharucoCenteringMeasurement:
+    """Medição geométrica para centralização (ID=8) e paralelismo por perímetros das extremidades (15,16 vs 0,1)."""
+    valid: bool
+    detected_markers_count: int
+    center_marker_id: int
+    center_marker_detected: bool
+    center_u_px: float
+    center_v_px: float
+    image_center_u_px: float
+    image_center_v_px: float
+    error_u_px: float
+    error_v_px: float
+    center_error_norm_px: float
+    center_marker_perimeter_px: float
+    scale_mm_per_px: float
+    error_u_mm: float
+    error_v_mm: float
+    center_error_norm_mm: float
+    sum_left_perimeters_px: float
+    sum_right_perimeters_px: float
+    horiz_asymmetry_pct: float
+    sum_top_perimeters_px: float
+    sum_bottom_perimeters_px: float
+    vert_asymmetry_pct: float
+    vert_sensitivity_pct_per_deg: float
+    roll_error_deg: float
+    left_markers_used: List[int]
+    right_markers_used: List[int]
+    top_markers_used: List[int]
+    bottom_markers_used: List[int]
+    rejection_reason: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "valid": self.valid,
+            "detected_markers_count": self.detected_markers_count,
+            "center_marker_id": self.center_marker_id,
+            "center_marker_detected": self.center_marker_detected,
+            "center_uv_px": [round(self.center_u_px, 3), round(self.center_v_px, 3)],
+            "image_center_uv_px": [round(self.image_center_u_px, 3), round(self.image_center_v_px, 3)],
+            "error_uv_px": [round(self.error_u_px, 3), round(self.error_v_px, 3)],
+            "center_error_norm_px": round(self.center_error_norm_px, 3),
+            "center_marker_perimeter_px": round(self.center_marker_perimeter_px, 3),
+            "scale_mm_per_px": round(self.scale_mm_per_px, 6),
+            "error_uv_mm": [round(self.error_u_mm, 3), round(self.error_v_mm, 3)],
+            "center_error_norm_mm": round(self.center_error_norm_mm, 3),
+            "sum_left_perimeters_px": round(self.sum_left_perimeters_px, 3),
+            "sum_right_perimeters_px": round(self.sum_right_perimeters_px, 3),
+            "horiz_asymmetry_pct": round(self.horiz_asymmetry_pct, 4),
+            "sum_top_perimeters_px": round(self.sum_top_perimeters_px, 3),
+            "sum_bottom_perimeters_px": round(self.sum_bottom_perimeters_px, 3),
+            "vert_asymmetry_pct": round(self.vert_asymmetry_pct, 4),
+            "roll_error_deg": round(self.roll_error_deg, 4),
+            "left_markers_used": self.left_markers_used,
+            "right_markers_used": self.right_markers_used,
+            "top_markers_used": self.top_markers_used,
+            "bottom_markers_used": self.bottom_markers_used,
+            "rejection_reason": self.rejection_reason,
+        }
+
+
+@dataclass
 class CalibrationSolution:
     """Resultado consolidado da calibração Intrínseca + Hand-Eye + Plano na Base."""
     resolution_px: Tuple[int, int]
@@ -209,6 +271,218 @@ class CharucoCalibrationSolver:
             charuco_ids=ids_1d,
             object_points_3d_mm=obj_pts_mm,
             t_base_to_tcp_mm=np.asarray(t_base_to_tcp_mm, dtype=np.float64),
+        )
+
+    def analyze_charuco_centering_and_parallelism(
+        self,
+        image_bgr: np.ndarray,
+        center_marker_id: int = 8,
+        debug_save_path: Optional[Path] = None,
+    ) -> CharucoCenteringMeasurement:
+        """
+        Analisa a posição do marcador central (ID=8) e os perímetros dos marcadores das extremidades
+        (Esquerda: 15,16 vs Direita: 0,1 | Topo: 2,7,12/15,0 vs Base: 4,9,14/16,1) para centralização
+        e alinhamento de paralelismo em malha fechada.
+        """
+        height, width = int(image_bgr.shape[0]), int(image_bgr.shape[1])
+        img_cu, img_cv = width / 2.0, height / 2.0
+        gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY) if image_bgr.ndim == 3 else image_bgr
+
+        aruco_detector = cv2.aruco.ArucoDetector(self.aruco_dict, self._detector_params)
+        marker_corners, marker_ids, _ = aruco_detector.detectMarkers(gray)
+
+        if marker_ids is None or len(marker_ids) < 3:
+            cnt = 0 if marker_ids is None else int(len(marker_ids))
+            return CharucoCenteringMeasurement(
+                valid=False,
+                detected_markers_count=cnt,
+                center_marker_id=center_marker_id,
+                center_marker_detected=False,
+                center_u_px=img_cu,
+                center_v_px=img_cv,
+                image_center_u_px=img_cu,
+                image_center_v_px=img_cv,
+                error_u_px=0.0,
+                error_v_px=0.0,
+                center_error_norm_px=0.0,
+                center_marker_perimeter_px=0.0,
+                scale_mm_per_px=0.0,
+                error_u_mm=0.0,
+                error_v_mm=0.0,
+                center_error_norm_mm=0.0,
+                sum_left_perimeters_px=0.0,
+                sum_right_perimeters_px=0.0,
+                horiz_asymmetry_pct=0.0,
+                sum_top_perimeters_px=0.0,
+                sum_bottom_perimeters_px=0.0,
+                vert_asymmetry_pct=0.0,
+                vert_sensitivity_pct_per_deg=1.1,
+                roll_error_deg=0.0,
+                left_markers_used=[],
+                right_markers_used=[],
+                top_markers_used=[],
+                bottom_markers_used=[],
+                rejection_reason=f"Marcadores ArUco insuficientes detectados ({cnt} < 3)",
+            )
+
+        perimeters: Dict[int, float] = {}
+        centers: Dict[int, np.ndarray] = {}
+        corners_map: Dict[int, np.ndarray] = {}
+        for c, mid_arr in zip(marker_corners, marker_ids.flatten()):
+            mid = int(mid_arr)
+            pts = np.asarray(c[0], dtype=np.float64)
+            corners_map[mid] = pts
+            centers[mid] = pts.mean(axis=0)
+            perimeters[mid] = float(cv2.arcLength(pts.astype(np.float32), True))
+
+        # 1. Centro do Tabuleiro via ArUco ID=8 (com fallback por homografia se ID=8 estiver ocluído)
+        center_detected = center_marker_id in centers
+        if center_detected:
+            cu, cv = float(centers[center_marker_id][0]), float(centers[center_marker_id][1])
+            p_center = float(perimeters[center_marker_id])
+        else:
+            obj_pts_all = self.board.getObjPoints()
+            board_ids_all = np.asarray(self.board.getIds()).flatten()
+            board_centers_3d = {
+                int(bid): np.asarray(pts, dtype=np.float64).mean(axis=0)[:2] * 1000.0
+                for bid, pts in zip(board_ids_all, obj_pts_all)
+            }
+            common_ids = [mid for mid in centers.keys() if mid in board_centers_3d]
+            if len(common_ids) >= 4:
+                src_pts = np.array([board_centers_3d[m] for m in common_ids], dtype=np.float64)
+                dst_pts = np.array([centers[m] for m in common_ids], dtype=np.float64)
+                h_mat, _ = cv2.findHomography(src_pts, dst_pts, method=0)
+                target_3d = board_centers_3d.get(
+                    center_marker_id,
+                    np.array([self.charuco_spec.board_width_mm / 2.0, self.charuco_spec.board_height_mm / 2.0]),
+                )
+                if h_mat is not None:
+                    proj = h_mat @ np.array([target_3d[0], target_3d[1], 1.0], dtype=np.float64)
+                    cu, cv = float(proj[0] / proj[2]), float(proj[1] / proj[2])
+                else:
+                    mean_uv = np.mean(list(centers.values()), axis=0)
+                    cu, cv = float(mean_uv[0]), float(mean_uv[1])
+            else:
+                mean_uv = np.mean(list(centers.values()), axis=0)
+                cu, cv = float(mean_uv[0]), float(mean_uv[1])
+            p_center = float(np.mean(list(perimeters.values())))
+
+        marker_perimeter_mm = 4.0 * (self.charuco_spec.marker_length_m * 1000.0)
+        scale_mm_per_px = marker_perimeter_mm / max(p_center, 1e-6)
+
+        err_u_px = cu - img_cu
+        err_v_px = cv - img_cv
+        err_norm_px = float(np.hypot(err_u_px, err_v_px))
+        err_u_mm = err_u_px * scale_mm_per_px
+        err_v_mm = err_v_px * scale_mm_per_px
+        err_norm_mm = float(np.hypot(err_u_mm, err_v_mm))
+
+        # 2. Paralelismo Horizontal: Marcadores da extremidade esquerda (15, 16) vs direita (0, 1)
+        left_used = [m for m in (15, 16) if m in perimeters]
+        if not left_used:
+            left_used = [m for m in (12, 13, 14) if m in perimeters]
+        right_used = [m for m in (0, 1) if m in perimeters]
+        if not right_used:
+            right_used = [m for m in (2, 3, 4) if m in perimeters]
+
+        if left_used and right_used:
+            # Soma equivalente a 2 marcadores de cada lado
+            sum_left = 2.0 * float(np.mean([perimeters[m] for m in left_used]))
+            sum_right = 2.0 * float(np.mean([perimeters[m] for m in right_used]))
+            horiz_asym_pct = 100.0 * (sum_left - sum_right) / (0.5 * (sum_left + sum_right))
+        else:
+            sum_left, sum_right, horiz_asym_pct = 0.0, 0.0, 0.0
+
+        # 3. Paralelismo Vertical: Marcadores do topo (2, 7, 12 ou 15, 0) vs base (4, 9, 14 ou 16, 1)
+        top_outer = [m for m in (2, 7, 12) if m in perimeters]
+        bot_outer = [m for m in (4, 9, 14) if m in perimeters]
+        if len(top_outer) >= 1 and len(bot_outer) >= 1:
+            top_used = top_outer
+            bot_used = bot_outer
+            vert_sens = 1.15
+        else:
+            top_used = [m for m in (15, 10, 5, 0) if m in perimeters]
+            bot_used = [m for m in (16, 11, 6, 1) if m in perimeters]
+            vert_sens = 0.60
+
+        if top_used and bot_used:
+            sum_top = 2.0 * float(np.mean([perimeters[m] for m in top_used]))
+            sum_bot = 2.0 * float(np.mean([perimeters[m] for m in bot_used]))
+            vert_asym_pct = 100.0 * (sum_top - sum_bot) / (0.5 * (sum_top + sum_bot))
+        else:
+            sum_top, sum_bot, vert_asym_pct = 0.0, 0.0, 0.0
+
+        # 4. Alinhamento de Roll no plano da imagem (linha central 13 -> 8 -> 3 ou borda do ID=8)
+        roll_angles_deg: List[float] = []
+        for m_left, m_right in ((13, 3), (13, 8), (8, 3), (15, 0), (16, 1), (12, 2), (14, 4)):
+            if m_left in centers and m_right in centers:
+                vec = centers[m_right] - centers[m_left]
+                if np.linalg.norm(vec) > 10.0:
+                    roll_angles_deg.append(float(np.degrees(np.arctan2(vec[1], vec[0]))))
+        if not roll_angles_deg and center_marker_id in corners_map:
+            c8 = corners_map[center_marker_id]
+            # Em paisagem (5x7), a aresta c[1]->c[2] ou c[0]->c[3] aponta ao longo do eixo horizontal
+            vec_edge = c8[0] - c8[3]
+            roll_angles_deg.append(float(np.degrees(np.arctan2(vec_edge[1], vec_edge[0]))))
+        roll_error_deg = float(np.median(roll_angles_deg)) if roll_angles_deg else 0.0
+
+        if debug_save_path is not None:
+            dbg = image_bgr.copy() if image_bgr.ndim == 3 else cv2.cvtColor(image_bgr, cv2.COLOR_GRAY2BGR)
+            cv2.aruco.drawDetectedMarkers(dbg, marker_corners, marker_ids)
+            # Desenhar mira no centro da imagem (ciano) e no centro do ID=8 (verde)
+            ic_pt = (int(round(img_cu)), int(round(img_cv)))
+            c8_pt = (int(round(cu)), int(round(cv)))
+            cv2.drawMarker(dbg, ic_pt, (255, 255, 0), cv2.MARKER_CROSS, 36, 2)
+            cv2.circle(dbg, c8_pt, 10, (0, 255, 0), -1)
+            cv2.arrowedLine(dbg, c8_pt, ic_pt, (0, 165, 255), 3, tipLength=0.15)
+            info_lines = [
+                f"ID={center_marker_id} err: ({err_u_px:+.1f}, {err_v_px:+.1f}) px | {err_norm_mm:.2f} mm",
+                f"Perim Esq(15,16)={sum_left:.1f} vs Dir(0,1)={sum_right:.1f} px ({horiz_asym_pct:+.2f}%)",
+                f"Perim Topo={sum_top:.1f} vs Base={sum_bot:.1f} px ({vert_asym_pct:+.2f}%) | Roll={roll_error_deg:+.2f} deg",
+            ]
+            for idx_line, text in enumerate(info_lines):
+                cv2.putText(
+                    dbg,
+                    text,
+                    (25, 40 + idx_line * 36),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.85,
+                    (0, 255, 255),
+                    2,
+                    cv2.LINE_AA,
+                )
+            debug_save_path.parent.mkdir(parents=True, exist_ok=True)
+            cv2.imwrite(str(debug_save_path), dbg)
+
+        return CharucoCenteringMeasurement(
+            valid=True,
+            detected_markers_count=len(perimeters),
+            center_marker_id=center_marker_id,
+            center_marker_detected=center_detected,
+            center_u_px=cu,
+            center_v_px=cv,
+            image_center_u_px=img_cu,
+            image_center_v_px=img_cv,
+            error_u_px=err_u_px,
+            error_v_px=err_v_px,
+            center_error_norm_px=err_norm_px,
+            center_marker_perimeter_px=p_center,
+            scale_mm_per_px=scale_mm_per_px,
+            error_u_mm=err_u_mm,
+            error_v_mm=err_v_mm,
+            center_error_norm_mm=err_norm_mm,
+            sum_left_perimeters_px=sum_left,
+            sum_right_perimeters_px=sum_right,
+            horiz_asymmetry_pct=horiz_asym_pct,
+            sum_top_perimeters_px=sum_top,
+            sum_bottom_perimeters_px=sum_bot,
+            vert_asymmetry_pct=vert_asym_pct,
+            vert_sensitivity_pct_per_deg=vert_sens,
+            roll_error_deg=roll_error_deg,
+            left_markers_used=left_used,
+            right_markers_used=right_used,
+            top_markers_used=top_used,
+            bottom_markers_used=bot_used,
         )
 
     def solve_from_detections(

@@ -15,6 +15,7 @@ from ..robot.denso_controller import DensoRobotController
 from ..robot.kinematics import (
     compute_pose_error,
     invert_se3,
+    matrix_to_pose,
     matrix_to_row_major_list,
     pose_to_matrix,
     tcp_offset_to_matrix,
@@ -30,6 +31,7 @@ from .calibration_generator import (
 )
 from .calibration_solver import (
     CharucoCalibrationSolver,
+    CharucoCenteringMeasurement,
     CharucoFrameDetection,
     ImageRectifier,
 )
@@ -68,6 +70,250 @@ class CalibrationManager:
             num_distortion_coeffs=self.cal_cfg.num_distortion_coeffs,
         )
 
+    def auto_center_charuco(
+        self,
+        robot: Optional[DensoRobotController] = None,
+        phone: Optional[SmartphoneController] = None,
+        session_dir: Optional[Path] = None,
+        initial_perturbation_se3: Optional[np.ndarray] = None,
+    ) -> Tuple[Pose, List[Dict[str, Any]]]:
+        """
+        Centraliza automaticamente o tabuleiro ChArUco (via marcador central ID=8) e alinha o paralelismo
+        entre o plano da câmera e o tabuleiro igualando a soma dos perímetros das extremidades
+        (Esquerda: 15,16 vs Direita: 0,1 | Topo vs Base).
+        """
+        own_connections = robot is None or phone is None
+        if own_connections:
+            console.rule("[bold cyan]Fase 0-Pre: Centralização e Paralelismo Automático do ChArUco (ID=8 + Perímetros)[/bold cyan]")
+            robot = DensoRobotController(self.config.robot, dry_run=self.config.dry_run)
+            phone = SmartphoneController(self.config.smartphone, dry_run=self.config.dry_run)
+            if not robot.connect():
+                raise RuntimeError("Falha ao conectar com o robô DENSO VS-050 para centralização do ChArUco.")
+            if not phone.connect():
+                robot.disconnect()
+                raise RuntimeError("Falha ao conectar com o Cam-App Android para centralização do ChArUco.")
+
+        assert robot is not None and phone is not None
+        out_dir = session_dir or (Path(self.cal_cfg.output_dir) / self.cal_cfg.calibration_id)
+        center_dir = out_dir / "centering"
+        center_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            # Posicionar inicialmente na pose nominal salva (p_cal_0_pose)
+            p_init: Pose = self.cal_cfg.p_cal_0_pose.to_pose()
+            if own_connections:
+                logger.info(f"Movendo robô para pose nominal inicial P_cal,0: {p_init.to_list()}")
+                robot.move_cartesian(p_init)
+
+            current_pose = robot.get_cartesian_pose()
+            primary_dev = phone.connected_devices[0]
+            phone.apply_preset("auto", device_id=primary_dev)
+
+            # No modo --dry-run, definir a pose fixa do tabuleiro no mundo a partir de p_init nominal
+            t_b_init = pose_to_matrix(p_init, euler_convention=self.euler_convention)
+            t_init_piv = np.eye(4, dtype=np.float64)
+            t_init_piv[2, 3] = self.cal_cfg.d0_mm
+            t_b_pivot_gt = t_b_init @ t_init_piv
+            # Na montagem física em paisagem do suporte: +X_C = -Y_F, +Y_C = +X_F, +Z_C = +Z_F
+            r_fc_nominal = np.array(
+                [[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]], dtype=np.float64
+            )
+            t_flange_to_cam_sim = np.eye(4, dtype=np.float64)
+            t_flange_to_cam_sim[:3, :3] = r_fc_nominal
+            board_shift = np.eye(4, dtype=np.float64)
+            board_shift[:3, 3] = [
+                -self.charuco_spec.board_width_mm / 2.0,
+                -self.charuco_spec.board_height_mm / 2.0,
+                0.0,
+            ]
+            # O tabuleiro no mundo (5x7 em paisagem) tem seus eixos alinhados com o flange em p_init
+            t_base_to_board_sim = t_b_pivot_gt @ board_shift
+
+            if self.config.dry_run and initial_perturbation_se3 is not None:
+                t_pert_pose = matrix_to_pose(
+                    t_b_init @ initial_perturbation_se3,
+                    fig=p_init.fig,
+                    euler_convention=self.euler_convention,
+                )
+                robot.move_cartesian(t_pert_pose)
+                current_pose = robot.get_cartesian_pose()
+
+            max_iters = max(1, int(self.cal_cfg.center_max_iterations))
+            kp_trans = float(self.cal_cfg.center_kp_translation)
+            kp_rot = float(self.cal_cfg.center_kp_rotation)
+            max_step_mm = float(self.cal_cfg.center_max_step_mm)
+            max_step_deg = float(self.cal_cfg.center_max_step_deg)
+
+            history: List[Dict[str, Any]] = []
+
+            for iteration in range(1, max_iters + 2):
+                if not self.config.dry_run and self.cal_cfg.calibration_settling_time_sec > 0:
+                    time.sleep(min(0.8, self.cal_cfg.calibration_settling_time_sec))
+
+                current_pose = robot.get_cartesian_pose()
+                t_b_curr = pose_to_matrix(current_pose, euler_convention=self.euler_convention)
+
+                raw_img_path = center_dir / f"center_raw_iter_{iteration:02d}.jpg"
+                dbg_img_path = center_dir / f"center_debug_iter_{iteration:02d}.jpg"
+
+                if self.config.dry_run:
+                    img_bgr = self._render_synthetic_charuco_image(
+                        t_b_tk=t_b_curr,
+                        t_flange_to_cam=t_flange_to_cam_sim,
+                        t_base_to_board=t_base_to_board_sim,
+                        resolution_px=(1920, 1080),
+                    )
+                    cv2.imwrite(str(raw_img_path), img_bgr)
+                else:
+                    saved = phone.capture_and_save_photo(
+                        device_id=primary_dev,
+                        target_dir=center_dir,
+                        target_filename=raw_img_path.name,
+                    )
+                    if not saved or not saved.exists():
+                        logger.warning(f"[Auto-Center] Falha ao capturar foto na iteração {iteration}.")
+                        break
+                    img_bgr = cv2.imread(str(saved), cv2.IMREAD_COLOR)
+                    if img_bgr is None:
+                        logger.warning(f"[Auto-Center] Imagem corrompida em {saved}.")
+                        break
+
+                meas = self.solver.analyze_charuco_centering_and_parallelism(
+                    image_bgr=img_bgr,
+                    center_marker_id=self.cal_cfg.center_marker_id,
+                    debug_save_path=dbg_img_path,
+                )
+
+                if not meas.valid:
+                    logger.warning(
+                        f"[Auto-Center {iteration}] Detecção insuficiente ({meas.rejection_reason}). Mantendo pose atual."
+                    )
+                    break
+
+                logger.info(
+                    f"[Auto-Center {iteration}/{max_iters}] ID={meas.center_marker_id} em "
+                    f"({meas.center_u_px:.1f}, {meas.center_v_px:.1f}) px | "
+                    f"Erro Centro = {meas.center_error_norm_px:.1f} px ({meas.center_error_norm_mm:.2f} mm) | "
+                    f"Perímetros Esq{meas.left_markers_used}={meas.sum_left_perimeters_px:.1f} px vs "
+                    f"Dir{meas.right_markers_used}={meas.sum_right_perimeters_px:.1f} px (diff={meas.horiz_asymmetry_pct:+.2f}%) | "
+                    f"Topo vs Base (diff={meas.vert_asymmetry_pct:+.2f}%) | Roll={meas.roll_error_deg:+.2f}°"
+                )
+
+                roll_ok = (not self.cal_cfg.center_align_roll) or (abs(meas.roll_error_deg) <= 1.0)
+                converged = (
+                    meas.center_error_norm_px <= self.cal_cfg.center_tolerance_px
+                    and abs(meas.horiz_asymmetry_pct) <= self.cal_cfg.parallelism_tolerance_pct
+                    and abs(meas.vert_asymmetry_pct) <= self.cal_cfg.parallelism_tolerance_pct
+                    and roll_ok
+                )
+
+                step_record: Dict[str, Any] = {
+                    "iteration": iteration,
+                    "pose_cartesian": [round(float(v), 6) for v in current_pose.to_list()],
+                    "measurement": meas.to_dict(),
+                    "converged": converged,
+                }
+                history.append(step_record)
+
+                if converged:
+                    logger.info(
+                        f"[Auto-Center Convergiu!] Tabuleiro centralizado e paralelo na iteração {iteration} "
+                        f"(Erro Centro = {meas.center_error_norm_px:.1f} px / {meas.center_error_norm_mm:.2f} mm, "
+                        f"Diff Perímetros Horiz = {meas.horiz_asymmetry_pct:+.2f}%, Vert = {meas.vert_asymmetry_pct:+.2f}%)."
+                    )
+                    break
+
+                if iteration > max_iters:
+                    logger.info(
+                        f"[Auto-Center] Limite de {max_iters} iterações atingido "
+                        f"(Erro residual = {meas.center_error_norm_px:.1f} px / {meas.center_error_norm_mm:.2f} mm)."
+                    )
+                    break
+
+                # Cálculo do passo de controle no referencial da câmera C e mapeamento para o flange F via R_FC
+                dt_cam_mm = np.array(
+                    [kp_trans * meas.error_u_mm, kp_trans * meas.error_v_mm, 0.0],
+                    dtype=np.float64,
+                )
+                d_omega_cam_deg = np.array(
+                    [
+                        +kp_rot * (meas.vert_asymmetry_pct / max(meas.vert_sensitivity_pct_per_deg, 0.3)),
+                        -kp_rot * (meas.horiz_asymmetry_pct / 1.65),
+                        +kp_rot * meas.roll_error_deg if self.cal_cfg.center_align_roll else 0.0,
+                    ],
+                    dtype=np.float64,
+                )
+
+                dt_flange_mm = r_fc_nominal @ dt_cam_mm
+                d_omega_flange_deg = r_fc_nominal @ d_omega_cam_deg
+
+                dx_f = float(np.clip(dt_flange_mm[0], -max_step_mm, max_step_mm))
+                dy_f = float(np.clip(dt_flange_mm[1], -max_step_mm, max_step_mm))
+                d_alpha_f = float(np.clip(d_omega_flange_deg[0], -max_step_deg, max_step_deg))
+                d_beta_f = float(np.clip(d_omega_flange_deg[1], -max_step_deg, max_step_deg))
+                d_gamma_f = float(np.clip(d_omega_flange_deg[2], -max_step_deg, max_step_deg))
+
+                step_record["control_step_flange"] = {
+                    "dx_mm": round(dx_f, 4),
+                    "dy_mm": round(dy_f, 4),
+                    "d_alpha_deg": round(d_alpha_f, 4),
+                    "d_beta_deg": round(d_beta_f, 4),
+                    "d_gamma_deg": round(d_gamma_f, 4),
+                }
+
+                # Atualizar pose em SE(3): translação paralela + rotação orbitando o pivô a d0_mm
+                t_trans = np.eye(4, dtype=np.float64)
+                t_trans[:3, 3] = [dx_f, dy_f, 0.0]
+                t_piv = np.eye(4, dtype=np.float64)
+                t_piv[2, 3] = self.cal_cfg.d0_mm
+                t_unpiv = np.eye(4, dtype=np.float64)
+                t_unpiv[2, 3] = -self.cal_cfg.d0_mm
+                t_rot = np.eye(4, dtype=np.float64)
+                t_rot[:3, :3] = Rotation.from_euler(
+                    self.euler_convention, [d_alpha_f, d_beta_f, d_gamma_f], degrees=True
+                ).as_matrix()
+
+                t_b_next = t_b_curr @ t_trans @ t_piv @ t_rot @ t_unpiv
+                next_pose = matrix_to_pose(
+                    t_b_next, fig=current_pose.fig, euler_convention=self.euler_convention
+                )
+
+                if not robot.move_cartesian(next_pose):
+                    logger.warning(
+                        "[Auto-Center] Passo de correção excedeu alcance cinemático. Tentando apenas translação 2D..."
+                    )
+                    t_b_next_trans_only = t_b_curr @ t_trans
+                    next_pose_trans = matrix_to_pose(
+                        t_b_next_trans_only, fig=current_pose.fig, euler_convention=self.euler_convention
+                    )
+                    if not robot.move_cartesian(next_pose_trans):
+                        logger.warning("[Auto-Center] Não foi possível avançar mais. Mantendo última pose válida.")
+                        break
+
+            final_pose = robot.get_cartesian_pose()
+            log_path = center_dir / "centering_log.json"
+            with open(log_path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "initial_pose_cartesian": [round(float(v), 6) for v in p_init.to_list()],
+                        "final_centered_pose_cartesian": [round(float(v), 6) for v in final_pose.to_list()],
+                        "iterations": history,
+                    },
+                    f,
+                    indent=2,
+                    ensure_ascii=False,
+                )
+            logger.info(
+                f"Pose P_cal,0 refinada após centralização automática: "
+                f"{[round(float(v), 3) for v in final_pose.to_list()]} (log salvo em {log_path})"
+            )
+            return final_pose, history
+
+        finally:
+            if own_connections:
+                phone.close_cameras()
+                robot.disconnect()
+
     def run_calibration(
         self,
         verify_poses: bool = False,
@@ -100,6 +346,17 @@ class CalibrationManager:
             logger.info(f"Posicionando robô na pose central de calibração P_cal,0 (d0={self.cal_cfg.d0_mm} mm)...")
             robot.move_cartesian(p_cal_0)
             measured_p0 = robot.get_cartesian_pose()
+
+            # ------------------------------------------------------------------
+            # Passo 1B: Centralização e Paralelismo Automático em P_{cal,0} (ID=8 + Perímetros)
+            # ------------------------------------------------------------------
+            if self.cal_cfg.auto_center_p0 and not self.config.dry_run:
+                logger.info("Executando centralização automática do ChArUco (ID=8) e paralelismo por perímetros...")
+                measured_p0, _ = self.auto_center_charuco(
+                    robot=robot,
+                    phone=phone,
+                    session_dir=calib_session_dir,
+                )
 
             # ------------------------------------------------------------------
             # Passo 2: Disparar captura 'auto' em P_{cal,0} e travar 'manual_calibrado'
@@ -433,6 +690,53 @@ class CalibrationManager:
             object_points_3d_mm=valid_obj_mm,
             t_base_to_tcp_mm=t_b_tk,
         )
+
+    def _render_synthetic_charuco_image(
+        self,
+        t_b_tk: np.ndarray,
+        t_flange_to_cam: np.ndarray,
+        t_base_to_board: np.ndarray,
+        resolution_px: Tuple[int, int] = (1920, 1080),
+    ) -> np.ndarray:
+        """Renderiza uma imagem perspectiva sintética real do tabuleiro ChArUco para simulação do Auto-Center."""
+        width, height = resolution_px
+        k_sim = np.array(
+            [[1578.0, 0.0, width / 2.0], [0.0, 1600.0, height / 2.0], [0.0, 0.0, 1.0]],
+            dtype=np.float64,
+        )
+        t_b_ck = t_b_tk @ t_flange_to_cam
+        t_ck_m = invert_se3(t_b_ck) @ t_base_to_board
+
+        rvec, _ = cv2.Rodrigues(t_ck_m[:3, :3])
+        tvec = t_ck_m[:3, 3].reshape(3, 1)
+
+        bw_mm = self.charuco_spec.board_width_mm
+        bh_mm = self.charuco_spec.board_height_mm
+        tex_w = int(round(bw_mm * 6.0))
+        tex_h = int(round(bh_mm * 6.0))
+        board_gray = self.solver.board.generateImage((tex_w, tex_h), marginSize=0, borderBits=1)
+        board_bgr = cv2.cvtColor(board_gray, cv2.COLOR_GRAY2BGR)
+
+        corners_3d = np.array(
+            [[0.0, 0.0, 0.0], [bw_mm, 0.0, 0.0], [bw_mm, bh_mm, 0.0], [0.0, bh_mm, 0.0]],
+            dtype=np.float64,
+        ).reshape(-1, 1, 3)
+        proj_2d, _ = cv2.projectPoints(corners_3d, rvec, tvec, k_sim, np.zeros(5, dtype=np.float64))
+        dst_pts = proj_2d.reshape(4, 2).astype(np.float32)
+        src_pts = np.array(
+            [[0.0, 0.0], [float(tex_w), 0.0], [float(tex_w), float(tex_h)], [0.0, float(tex_h)]],
+            dtype=np.float32,
+        )
+        h_persp = cv2.getPerspectiveTransform(src_pts, dst_pts)
+        warped = cv2.warpPerspective(
+            board_bgr,
+            h_persp,
+            (width, height),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=(235, 235, 235),
+        )
+        return warped
 
     @staticmethod
     def rectify_dataset_directory(

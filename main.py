@@ -34,6 +34,19 @@ def parse_args():
         help="Fase 0A: Gerar prancha ChArUco em alta resolução (assets/charuco_board.png) e charuco_spec.json.",
     )
     parser.add_argument(
+        "--center-charuco",
+        action="store_true",
+        help=(
+            "Fase 0-Pre: Centralizar automaticamente o ChArUco (via marcador central ID=8) e alinhar "
+            "o paralelismo pelos perímetros das extremidades (15,16 vs 0,1)."
+        ),
+    )
+    parser.add_argument(
+        "--no-auto-center",
+        action="store_true",
+        help="Desabilitar a centralização automática em P_cal,0 no início de --calibrate-camera.",
+    )
+    parser.add_argument(
         "--calibrate-camera",
         action="store_true",
         help="Fase 0B: Executar calibração automatizada '2 em 1' (Intrínsecos K, D + Hand-Eye AX=XB em 24 poses).",
@@ -204,8 +217,20 @@ def main():
         logger.info(f"Especificação de impressão 1:1 salva em: {spec_out.resolve()}")
         ran_phase = True
 
+    if args.no_auto_center:
+        config.calibration.auto_center_p0 = False
+
+    # Fase 0-Pre: Centralização automática standalone do ChArUco (se chamado sem --calibrate-camera)
+    if args.center_charuco and not args.calibrate_camera:
+        cal_mgr = CalibrationManager(config)
+        centered_pose, _ = cal_mgr.auto_center_charuco()
+        config.calibration.p_cal_0_pose.cartesian = centered_pose.to_list()
+        ran_phase = True
+
     # Fase 0B: Calibração "2 em 1" (Intrínsecos + Hand-Eye via ChArUco em 24 poses)
     if args.calibrate_camera:
+        if args.center_charuco:
+            config.calibration.auto_center_p0 = True
         cal_mgr = CalibrationManager(config)
         _, saved_cal_path = cal_mgr.run_calibration(
             verify_poses=args.verify_poses,
