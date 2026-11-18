@@ -8,9 +8,9 @@ robot:
   ip_address: "192.168.160.225"
   workspace_name: "VS_WORKSPACE"
   control_name: "DENSO_VS050"
-  speed: 20.0                    # Velocidade do braço (0 a 100%)
-  accel: 10.0                    # Aceleração (0 a 100%)
-  decel: 10.0                    # Desaceleração (0 a 100%)
+  speed: 10.0                    # Velocidade do braço (0 a 100%)
+  accel: 5.0                    # Aceleração (0 a 100%)
+  decel: 5.0                    # Desaceleração (0 a 100%)
   robot_settling_time_sec: 1.5   # Tempo de estabilização mecânica após posicionamento antes da foto
   euler_convention: "xyz"        # Convenção nativa DENSO RC8: 'xyz' extrínseco (equivalente a 'ZYX' intrínseco)
   mount_id: "MOUNT_FLANGE_V1"    # Identificador físico do suporte acoplado ao flange
@@ -28,7 +28,7 @@ robot:
 smartphone:
   # Endereço(s) IP do aplicativo Cam-App (HTTP / NanoHTTPD na porta 8080)
   ips:
-    - "192.168.158.65"
+    - "192.168.155.44"
   port: 8080
   smartphone_id: "moto_g_2025"
   camera_physical_id: "0"        # ID da câmera física traseira principal no Camera2 HAL
@@ -75,8 +75,8 @@ smartphone:
 
 # Fase 0: Calibração Automatizada "2 em 1" (Intrínsecos K, D + Hand-Eye AX = XB via ChArUco)
 calibration:
-  calibration_id: "calib_motog2025_mount01_20261113"
-  calibration_file: "assets/dataset/calibrations/calib_motog2025_mount01_20261113/calibration_profile.json"
+  calibration_id: "calib_motog2025_mount01_20261117"
+  calibration_file: "assets/dataset/calibrations/calib_motog2025_mount01_20261117/calibration_profile.json"
   output_dir: "assets/dataset/calibrations"
   rectify_on_collect: true       # Salva automaticamente o par retificado em rectified/ durante --collect
   p_cal_0_pose:
@@ -135,13 +135,13 @@ sampling:
 
 scenes:
   - name: "scene_01"
-    scene_category: "planar_core"
-    description: "Enquadramento do Cenário 01 - Alvo Planar Principal"
+    scene_category: "black_cube"
+    description: "Cubo Preto"
     camera_presets:
       - "auto"
       - "manual_calibrado"
     p0_pose:
-      cartesian: [440.0, 60.0, 585.0, 16.0, -22.0, 150.0, 1]
+      cartesian: [-302.691, -129.623, 395.596, -178.1301, 48.1851, 55.5024, 5]
 
   - name: "scene_02"
     scene_category: "model_violation"
@@ -150,7 +150,7 @@ scenes:
       - "auto"
       - "manual_calibrado"
     p0_pose:
-      cartesian: [440.0, 60.0, 585.0, 16.0, -22.0, 150.0, 1]
+      cartesian: [-38.61861, 257.5869, 477.2345, -178.1336, 48.18206, -39.37456, 5]
 
 dataset:
   output_dir: "assets/dataset"

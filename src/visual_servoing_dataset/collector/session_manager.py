@@ -124,29 +124,63 @@ class SessionManager:
 
                 for axis_idx, sign, label, desc in AXIS_EXPLORATION_STEPS:
                     default_val = u_vec[axis_idx] if sign > 0 else l_vec[axis_idx]
-                    xi_probe = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-                    xi_probe[axis_idx] = default_val
-                    probe_pose, _, _ = apply_local_perturbation(
-                        measured_p0, xi_probe, euler_convention=self.euler_convention
-                    )
+                    candidate_val = float(default_val)
 
                     if interactive and not self.config.dry_run:
-                        user_in = console.input(
-                            f"[bold yellow][{scene_cfg.name}] Limite {label} ({desc})[/bold yellow] "
-                            f"- Digite valor, 'read' para ler pose atual do robô, ou Enter para manter [{default_val}]: "
-                        ).strip()
-                        if user_in.lower() == "read":
-                            curr_pose = robot.get_cartesian_pose()
-                            _, xi_meas = compute_relative_transform(
-                                measured_p0, curr_pose, euler_convention=self.euler_convention
-                            )
-                            measured_val = round(float(xi_meas[axis_idx]), 4)
-                        elif user_in:
-                            measured_val = float(user_in)
-                        else:
-                            measured_val = float(default_val)
+                        # Mover inicialmente para o valor padrão do limite para visualização no stream.py
+                        xi_probe = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+                        xi_probe[axis_idx] = candidate_val
+                        probe_pose, _, _ = apply_local_perturbation(
+                            measured_p0, xi_probe, euler_convention=self.euler_convention
+                        )
+                        robot.move_cartesian(probe_pose)
+
+                        while True:
+                            user_in = console.input(
+                                f"[bold yellow][{scene_cfg.name}] Limite {label} ({desc}) atual = {candidate_val}[/bold yellow]\n"
+                                f"  [Enter] Confirmar {candidate_val} | [número] Testar novo valor | ['p0'] Voltar a P0 | ['read'] Ler do robô: "
+                            ).strip()
+                            if not user_in:
+                                measured_val = round(float(candidate_val), 4)
+                                robot.move_cartesian(measured_p0)
+                                break
+                            if user_in.lower() == "p0":
+                                robot.move_cartesian(measured_p0)
+                                continue
+                            if user_in.lower() == "read":
+                                curr_pose = robot.get_cartesian_pose()
+                                _, xi_meas = compute_relative_transform(
+                                    measured_p0, curr_pose, euler_convention=self.euler_convention
+                                )
+                                candidate_val = round(float(xi_meas[axis_idx]), 4)
+                                logger.info(f"Valor lido do robô para {label}: {candidate_val}")
+                                continue
+                            try:
+                                test_val = float(user_in)
+                                if sign < 0 and test_val > 0:
+                                    test_val = -test_val
+                                elif sign > 0 and test_val < 0:
+                                    test_val = abs(test_val)
+                                xi_test = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+                                xi_test[axis_idx] = test_val
+                                test_pose, _, _ = apply_local_perturbation(
+                                    measured_p0, xi_test, euler_convention=self.euler_convention
+                                )
+                                if robot.move_cartesian(test_pose):
+                                    candidate_val = round(test_val, 4)
+                                else:
+                                    logger.warning(
+                                        f"Valor {test_val} para {label} está fora de alcance (OutRange). Tente um valor menor."
+                                    )
+                            except ValueError:
+                                logger.warning("Entrada inválida. Digite um número, 'p0', 'read' ou pressione Enter.")
                     else:
                         # Simular deslocamento até o limite e recuperar via transformação relativa em SE(3)
+                        xi_probe = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+                        xi_probe[axis_idx] = candidate_val
+                        probe_pose, _, _ = apply_local_perturbation(
+                            measured_p0, xi_probe, euler_convention=self.euler_convention
+                        )
                         robot.move_cartesian(probe_pose)
                         curr_pose = robot.get_cartesian_pose()
                         _, xi_meas = compute_relative_transform(
@@ -161,6 +195,11 @@ class SessionManager:
 
                 # Retornar a P0 ao concluir exploração da cena
                 robot.move_cartesian(measured_p0)
+                logger.info(
+                    f"[{scene_cfg.name}] Limites definidos:\n"
+                    f"  lower_bounds: {l_vec}\n"
+                    f"  upper_bounds: {u_vec}"
+                )
 
                 scenes_session_data[scene_cfg.name] = {
                     "scene_id": scene_cfg.name,
