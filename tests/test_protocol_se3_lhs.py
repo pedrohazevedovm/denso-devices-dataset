@@ -17,6 +17,7 @@ from src.visual_servoing_dataset.config import (
     SceneConfig,
     SmartphoneConfig,
     TCPOffset,
+    load_config,
 )
 from src.visual_servoing_dataset.robot.kinematics import (
     apply_local_perturbation,
@@ -250,3 +251,95 @@ def test_camera_parameter_audit():
     assert res_bad["compliant"] is False
     assert "iso" in res_bad["divergences"]
     assert "ois_enabled" in res_bad["divergences"]
+
+
+def test_per_scene_bounds_loading_and_plan_generation(tmp_path: Path):
+    """Valida que lower_bounds e upper_bounds são configurados, validados e usados por cena."""
+    out_dir = tmp_path / "dataset_per_scene"
+    yaml_path = tmp_path / "config_per_scene.yaml"
+
+    s1_l = [-20.0, -15.0, -30.0, -5.0, -5.0, -10.0]
+    s1_u = [20.0, 15.0, 30.0, 5.0, 5.0, 10.0]
+    s2_l = [-45.0, -35.0, -50.0, -12.0, -8.0, -20.0]
+    s2_u = [45.0, 35.0, 50.0, 12.0, 8.0, 20.0]
+
+    yaml_content = f"""
+dry_run: true
+sampling:
+  isolated_fractions: [-1.0, -0.5, 0.5, 1.0]
+  lhs_samples: 10
+  lhs_shrinkage_factor: 0.75
+  lhs_seed: 42
+scenes:
+  - name: "scene_01"
+    scene_category: "black_cube"
+    p0_pose:
+      cartesian: [-302.691, -129.623, 395.596, -178.1301, 48.1851, 55.5024, 5]
+    lower_bounds: {s1_l}
+    upper_bounds: {s1_u}
+  - name: "scene_02"
+    scene_category: "model_violation"
+    p0_pose:
+      cartesian: [-38.61861, 257.5869, 477.2345, -178.1336, 48.18206, -39.37456, 5]
+    lower_bounds: {s2_l}
+    upper_bounds: {s2_u}
+dataset:
+  output_dir: "{out_dir.as_posix()}"
+"""
+    yaml_path.write_text(yaml_content, encoding="utf-8")
+
+    cfg = load_config(yaml_path)
+    assert cfg.scenes[0].lower_bounds == s1_l
+    assert cfg.scenes[0].upper_bounds == s1_u
+    assert cfg.scenes[1].lower_bounds == s2_l
+    assert cfg.scenes[1].upper_bounds == s2_u
+
+    # Gera plano diretamente sem session_plan.json prévio
+    plan_file = SessionManager(cfg).generate_plan()
+    assert plan_file.exists()
+
+    with open(plan_file, "r", encoding="utf-8") as f:
+        plan = json.load(f)
+
+    plan_s1 = plan["scenes"]["scene_01"]
+    plan_s2 = plan["scenes"]["scene_02"]
+    assert plan_s1["lower_bounds"] == s1_l
+    assert plan_s1["upper_bounds"] == s1_u
+    assert plan_s2["lower_bounds"] == s2_l
+    assert plan_s2["upper_bounds"] == s2_u
+
+    s1_p1_x = [abs(p["xi_local"][0]) for p in plan_s1["poses"] if p["pose_family"] == "P1"]
+    s2_p1_x = [abs(p["xi_local"][0]) for p in plan_s2["poses"] if p["pose_family"] == "P1"]
+    assert max(s1_p1_x) == pytest.approx(20.0)
+    assert max(s2_p1_x) == pytest.approx(45.0)
+
+    shrink = cfg.sampling.lhs_shrinkage_factor
+    for scene_plan, l_raw, u_raw in ((plan_s1, s1_l, s1_u), (plan_s2, s2_l, s2_u)):
+        eff_l = [v * shrink for v in l_raw]
+        eff_u = [v * shrink for v in u_raw]
+        p7_poses = [p for p in scene_plan["poses"] if p["pose_family"] == "P7"]
+        assert len(p7_poses) == 10
+        for p7 in p7_poses:
+            for d in range(6):
+                assert eff_l[d] - 1e-9 <= p7["xi_local"][d] <= eff_u[d] + 1e-9
+
+    # Validação de erros em SceneConfig
+    with pytest.raises(ValueError):
+        SceneConfig.from_dict({
+            "name": "bad_len",
+            "lower_bounds": [-10.0, -10.0, -10.0, -5.0, -5.0],
+        })
+    with pytest.raises(ValueError):
+        SceneConfig.from_dict({
+            "name": "bad_order",
+            "lower_bounds": [10.0, -10.0, -10.0, -5.0, -5.0, -5.0],
+            "upper_bounds": [-10.0, 10.0, 10.0, 5.0, 5.0, 5.0],
+        })
+
+    # Verificar config.yaml real do repositório
+    repo_cfg_path = Path(__file__).resolve().parent.parent / "config.yaml"
+    repo_cfg = load_config(repo_cfg_path)
+    assert len(repo_cfg.scenes) >= 2
+    for scene in repo_cfg.scenes:
+        assert scene.lower_bounds is not None and len(scene.lower_bounds) == 6
+        assert scene.upper_bounds is not None and len(scene.upper_bounds) == 6

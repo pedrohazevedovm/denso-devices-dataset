@@ -83,6 +83,11 @@ def parse_args():
         help="Fase 2B: Verificar poses geradas (com substituição rastreável de rejeições em P7) e congelar poses_plan.json com SHA-256.",
     )
     parser.add_argument(
+        "--analyze-plan",
+        action="store_true",
+        help="Auditar estatisticamente o equilíbrio LHS da família P7 (Original vs Final) no poses_plan.json e gerar lhs_balance_report.md.",
+    )
+    parser.add_argument(
         "--collect",
         action="store_true",
         help="Fase 3: Executar coleta automática pareada ('auto' + 'manual_calibrado') a partir do plano congelado.",
@@ -103,7 +108,24 @@ def parse_args():
         "--reject-poses",
         nargs="*",
         default=None,
-        help="Lista opcional de pose_ids (ex: p7_lhs_003) a rejeitar e substituir durante --verify-plan.",
+        help="Lista opcional de pose_ids (ex: p7_lhs_003 ou scene_01:p7_lhs_003) a rejeitar e substituir durante --verify-plan.",
+    )
+    parser.add_argument(
+        "--reverify-poses",
+        nargs="*",
+        default=None,
+        help="Reabrir poses já aprovadas (ex: p7_lhs_005 ou scene_01:p7_lhs_005) para reavaliação durante --verify-plan, mesmo em plano congelado.",
+    )
+    parser.add_argument(
+        "--reverify-all",
+        action="store_true",
+        help="Reabrir todas as poses P7 aprovadas (preservando histórico de rejeições) para reavaliação durante --verify-plan.",
+    )
+    parser.add_argument(
+        "--scenes",
+        nargs="*",
+        default=None,
+        help="Restringir --verify-plan (ou reavaliação) a cenas específicas (ex: scene_01).",
     )
     parser.add_argument(
         "--interactive",
@@ -268,7 +290,14 @@ def main():
             plan_path=poses_plan_path,
             interactive=args.interactive,
             reject_pose_ids=args.reject_poses,
+            reverify_pose_ids=args.reverify_poses,
+            reverify_all=args.reverify_all,
+            target_scenes=args.scenes,
         )
+        ran_phase = True
+
+    if args.analyze_plan:
+        session_mgr.analyze_plan(plan_path=poses_plan_path)
         ran_phase = True
 
     if args.collect or not ran_phase:

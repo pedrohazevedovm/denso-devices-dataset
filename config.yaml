@@ -8,9 +8,9 @@ robot:
   ip_address: "192.168.160.225"
   workspace_name: "VS_WORKSPACE"
   control_name: "DENSO_VS050"
-  speed: 10.0                    # Velocidade do braço (0 a 100%)
-  accel: 5.0                    # Aceleração (0 a 100%)
-  decel: 5.0                    # Desaceleração (0 a 100%)
+  speed: 20.0                    # Velocidade do braço (0 a 100%)
+  accel: 10.0                    # Aceleração (0 a 100%)
+  decel: 10.0                    # Desaceleração (0 a 100%)
   robot_settling_time_sec: 1.5   # Tempo de estabilização mecânica após posicionamento antes da foto
   euler_convention: "xyz"        # Convenção nativa DENSO RC8: 'xyz' extrínseco (equivalente a 'ZYX' intrínseco)
   mount_id: "MOUNT_FLANGE_V1"    # Identificador físico do suporte acoplado ao flange
@@ -75,8 +75,8 @@ smartphone:
 
 # Fase 0: Calibração Automatizada "2 em 1" (Intrínsecos K, D + Hand-Eye AX = XB via ChArUco)
 calibration:
-  calibration_id: "calib_motog2025_mount01_20261117"
-  calibration_file: "assets/dataset/calibrations/calib_motog2025_mount01_20261117/calibration_profile.json"
+  calibration_id: "calib_motog2025_mount01_20261118"
+  calibration_file: "assets/dataset/calibrations/calib_motog2025_mount01_20261118/calibration_profile.json"
   output_dir: "assets/dataset/calibrations"
   rectify_on_collect: true       # Salva automaticamente o par retificado em rectified/ durante --collect
   p_cal_0_pose:
@@ -113,12 +113,8 @@ calibration:
   center_max_step_deg: 5.0
 
 # Parâmetros de Geração das Famílias de Poses P0..P7 em SE(3) (Referencial Local T_0)
+# Nota: Os vetores lower_bounds e upper_bounds ([l, u]) são definidos individualmente dentro de cada item em scenes:.
 sampling:
-  # Vetores de limites inferiores l = [x_min, y_min, z_min, rx_min, ry_min, rz_min] (mm e graus)
-  lower_bounds: [-30.0, -25.0, -40.0, -10.0, -10.0, -15.0]
-  # Vetores de limites superiores u = [x_max, y_max, z_max, rx_max, ry_max, rz_max] (mm e graus)
-  upper_bounds: [30.0, 25.0, 40.0, 10.0, 10.0, 15.0]
-
   # Frações determinísticas dos limites [l, u] para cada eixo isolado em P1..P6
   isolated_fractions: [-1.0, -0.75, -0.50, -0.25, 0.25, 0.50, 0.75, 1.0]
 
@@ -142,15 +138,21 @@ scenes:
       - "manual_calibrado"
     p0_pose:
       cartesian: [-302.691, -129.623, 395.596, -178.1301, 48.1851, 55.5024, 5]
+    # Vetores de limites [x, y, z, rx, ry, rz] (mm e graus) específicos desta cena
+    lower_bounds: [-80.0, -55.0, -70.0, -15.0, -8.0, -15.0]
+    upper_bounds: [80.0, 160.0, 100.0, 15.0, 8.0, 15.0]
 
   - name: "scene_02"
-    scene_category: "model_violation"
-    description: "Enquadramento do Cenário 02 - Alvo 3D / Violação de Planaridade"
+    scene_category: "fox"
+    description: "raposa"
     camera_presets:
       - "auto"
       - "manual_calibrado"
     p0_pose:
       cartesian: [-38.61861, 257.5869, 477.2345, -178.1336, 48.18206, -39.37456, 5]
+    # Vetores de limites [x, y, z, rx, ry, rz] (mm e graus) específicos desta cena
+    lower_bounds: [-50.0, -150.0, -100.0, -15.0, -5.0, -15.0]
+    upper_bounds: [30.0, 150.0, 100.0, 15.0, 3.0, 15.0]
 
 dataset:
   output_dir: "assets/dataset"

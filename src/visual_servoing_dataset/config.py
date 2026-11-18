@@ -2,7 +2,7 @@ import copy
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Union
+from typing import Dict, List, Optional, Tuple, Any, Union
 import yaml
 
 try:
@@ -277,8 +277,8 @@ class PoseSamplingConfig:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "PoseSamplingConfig":
-        lower = data.get("lower_bounds", DEFAULT_LOWER_BOUNDS)
-        upper = data.get("upper_bounds", DEFAULT_UPPER_BOUNDS)
+        lower = data.get("lower_bounds") if data.get("lower_bounds") is not None else DEFAULT_LOWER_BOUNDS
+        upper = data.get("upper_bounds") if data.get("upper_bounds") is not None else DEFAULT_UPPER_BOUNDS
         if len(lower) != 6 or len(upper) != 6:
             raise ValueError("lower_bounds e upper_bounds devem conter exatamente 6 elementos [x, y, z, rx, ry, rz].")
 
@@ -350,6 +350,57 @@ class SceneConfig:
     lower_bounds: Optional[List[float]] = None
     upper_bounds: Optional[List[float]] = None
 
+    def __post_init__(self) -> None:
+        if self.lower_bounds is not None:
+            if len(self.lower_bounds) != 6:
+                raise ValueError(
+                    f"Cena '{self.name}': lower_bounds deve conter exatamente 6 elementos [x, y, z, rx, ry, rz]."
+                )
+            self.lower_bounds = [float(v) for v in self.lower_bounds]
+        if self.upper_bounds is not None:
+            if len(self.upper_bounds) != 6:
+                raise ValueError(
+                    f"Cena '{self.name}': upper_bounds deve conter exatamente 6 elementos [x, y, z, rx, ry, rz]."
+                )
+            self.upper_bounds = [float(v) for v in self.upper_bounds]
+        if self.lower_bounds is not None and self.upper_bounds is not None:
+            if any(l > u for l, u in zip(self.lower_bounds, self.upper_bounds)):
+                raise ValueError(
+                    f"Cena '{self.name}': lower_bounds ({self.lower_bounds}) não pode exceder upper_bounds ({self.upper_bounds})."
+                )
+
+    def resolve_bounds(
+        self, fallback_sampling: Optional[PoseSamplingConfig] = None
+    ) -> Tuple[List[float], List[float]]:
+        """Resolve os limites [l, u] priorizando os valores da própria cena e usando sampling como fallback."""
+        l_vec = (
+            self.lower_bounds
+            if self.lower_bounds is not None
+            else (
+                fallback_sampling.lower_bounds
+                if fallback_sampling is not None
+                else DEFAULT_LOWER_BOUNDS
+            )
+        )
+        u_vec = (
+            self.upper_bounds
+            if self.upper_bounds is not None
+            else (
+                fallback_sampling.upper_bounds
+                if fallback_sampling is not None
+                else DEFAULT_UPPER_BOUNDS
+            )
+        )
+        if len(l_vec) != 6 or len(u_vec) != 6:
+            raise ValueError(
+                f"Cena '{self.name}': lower_bounds e upper_bounds devem conter exatamente 6 elementos [x, y, z, rx, ry, rz]."
+            )
+        if any(l > u for l, u in zip(l_vec, u_vec)):
+            raise ValueError(
+                f"Cena '{self.name}': lower_bounds ({l_vec}) não pode exceder upper_bounds ({u_vec})."
+            )
+        return list(l_vec), list(u_vec)
+
     @property
     def scene_id(self) -> str:
         return self.name
@@ -376,8 +427,8 @@ class SceneConfig:
             description=str(data.get("description", "")),
             p0_pose=p0_pose,
             camera_presets=presets,
-            lower_bounds=[float(v) for v in lower] if lower else None,
-            upper_bounds=[float(v) for v in upper] if upper else None,
+            lower_bounds=[float(v) for v in lower] if lower is not None else None,
+            upper_bounds=[float(v) for v in upper] if upper is not None else None,
         )
 
 

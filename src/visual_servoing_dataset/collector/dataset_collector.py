@@ -523,6 +523,7 @@ class DatasetCollector:
                     "isolated_fractions": scene_plan.isolated_fractions,
                     "calibrated_manual_settings": calibrated_by_cam,
                     "lhs_metadata": scene_plan.lhs_metadata.to_dict(),
+                    "lhs_balance_report": scene_plan.lhs_balance_report,
                     "p0_start_end_drift": p0_drift_summary,
                     "rejected_poses_history": [p.to_dict() for p in rejected_poses],
                     "pairs": executed_pairs,

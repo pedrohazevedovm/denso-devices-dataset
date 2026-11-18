@@ -12,6 +12,7 @@ from .kinematics import (
     matrix_to_row_major_list,
     pose_to_matrix,
 )
+from .lhs_diagnostics import select_optimal_lhs_replacement
 
 
 ISOLATED_FAMILY_SPECS: List[Tuple[str, int, str, str]] = [
@@ -205,18 +206,31 @@ class PoseFamilyGenerator:
         lower_bounds: Optional[Sequence[float]] = None,
         upper_bounds: Optional[Sequence[float]] = None,
         repeat_index: int = 0,
+        active_u_samples: Optional[Sequence[Sequence[float]]] = None,
+        rejected_u_samples: Optional[Sequence[Sequence[float]]] = None,
+        target_n_samples: Optional[int] = None,
     ) -> PlannedPoseCandidate:
         """Gera uma amostra substituta rastreável para uma pose P7 rejeitada durante --verify-plan."""
         p0_obj: Pose = base_pose.to_pose() if isinstance(base_pose, BasePose) else ensure_pose(base_pose)
         l_eff, u_eff = self.compute_effective_lhs_bounds(lower_bounds, upper_bounds, self.config.lhs_shrinkage_factor)
         derived_seed = int(self.config.lhs_seed) + 1000 + int(replacement_index)
 
-        sampler = qmc.LatinHypercube(
-            d=6,
-            optimization=self.config.lhs_optimization,  # type: ignore[arg-type]
-            seed=derived_seed,
-        )
-        u_norm = sampler.random(n=1)[0]
+        sel_metrics: Optional[Dict] = None
+        if active_u_samples is not None and len(active_u_samples) >= 1:
+            u_norm, sel_metrics = select_optimal_lhs_replacement(
+                u_active=active_u_samples,
+                u_rejected=rejected_u_samples,
+                target_n=target_n_samples or self.config.lhs_samples,
+                seed=derived_seed,
+            )
+        else:
+            sampler = qmc.LatinHypercube(
+                d=6,
+                optimization=self.config.lhs_optimization,  # type: ignore[arg-type]
+                seed=derived_seed,
+            )
+            u_norm = sampler.random(n=1)[0]
+
         xi_phys = l_eff + u_norm * (u_eff - l_eff)
 
         u_list = [round(float(v), 8) for v in u_norm]
@@ -236,6 +250,7 @@ class PoseFamilyGenerator:
         )
         candidate.replaces_pose_id = rejected_pose_id
         candidate.replacement_seed = derived_seed
+        candidate.replacement_selection_metrics = sel_metrics
         return candidate
 
     def _build_candidate(

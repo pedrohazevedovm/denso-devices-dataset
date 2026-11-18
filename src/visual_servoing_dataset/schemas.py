@@ -43,6 +43,7 @@ class PlannedPoseCandidate:
     rejected_at: Optional[str] = None
     replaces_pose_id: Optional[str] = None
     replacement_seed: Optional[int] = None
+    replacement_selection_metrics: Optional[Dict[str, Any]] = None
     verified_at: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
@@ -69,9 +70,10 @@ class LHSGenerationMetadata:
     physical_samples_xi: List[List[float]]
     replacement_rule: str = (
         "Quando uma pose P7 é rejeitada na Fase 2, seu registro permanece intacto com status='rejected' "
-        "e rejection_reason preenchido. Uma amostra substituta é gerada via LatinHypercube(d=6) com "
-        "seed determinística derivada (replacement_seed = base_seed + 1000 + replacement_index) e "
-        "vinculada via replaces_pose_id."
+        "e rejection_reason preenchido. Uma amostra substituta é selecionada via otimização Space-Filling "
+        "(Min-CD2 + Maximin + redução de correlação + cobertura de estratos vazios, com exclusão da região "
+        "rejeitada) usando seed determinística derivada (replacement_seed = base_seed + 1000 + replacement_index) "
+        "e vinculada via replaces_pose_id."
     )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -98,6 +100,7 @@ class ScenePosesPlan:
     calibrated_manual_settings: Dict[str, Any]
     lhs_metadata: LHSGenerationMetadata
     poses: List[PlannedPoseCandidate] = field(default_factory=list)
+    lhs_balance_report: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -113,6 +116,7 @@ class ScenePosesPlan:
             "isolated_fractions": self.isolated_fractions,
             "calibrated_manual_settings": self.calibrated_manual_settings,
             "lhs_metadata": self.lhs_metadata.to_dict(),
+            "lhs_balance_report": self.lhs_balance_report,
             "poses": [p.to_dict() for p in self.poses],
         }
 
@@ -132,6 +136,7 @@ class ScenePosesPlan:
             calibrated_manual_settings=data.get("calibrated_manual_settings", {}),
             lhs_metadata=LHSGenerationMetadata.from_dict(data["lhs_metadata"]),
             poses=[PlannedPoseCandidate.from_dict(p) for p in data.get("poses", [])],
+            lhs_balance_report=data.get("lhs_balance_report"),
         )
 
 
